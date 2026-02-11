@@ -95,7 +95,7 @@ def run_query(request: QueryRequest):
         else chroma_db_manager.search(**request.model_dump())
     )
 
-    with open('test.json', 'w') as f:
+    with open('test.json', 'w', encoding='utf-8') as f:
         f.write (f'RECV Result = {result}')
     return result
 
