@@ -2,10 +2,13 @@
 
 import chromadb
 import json
+import logging
 import os
 from collections import Counter
 from typing import List, Optional
 from embedding_utils import generate_embeddings
+
+logger = logging.getLogger(__name__)
 
 def build_where_clause(
     tags: Optional[List[str]] = None,
@@ -35,10 +38,6 @@ def build_where_clause(
             conditions = [{field_name: {"$eq": value}} for value in values]
         # For fields stored as JSON strings of lists, we use substring matching ($contains)
         else:
-            for value in values:
-                print(
-                    f"+++++ Test field_name: {field_name}, values: {value}, type: {type(value)}"
-                )
             conditions = [{field_name: {"$contains": value}} for value in values]
 
         if len(conditions) > 1:
@@ -47,10 +46,10 @@ def build_where_clause(
             and_conditions.append(conditions[0])
 
     # Build conditions for each filter type passed to the function
-    create_or_condition("tags", tags) if tags else None
-    create_or_condition("artist", artists) if artists else None
-    create_or_condition("category", categories) if categories else None
-    create_or_condition("compatible_figures", compatible_figures) if compatible_figures else None
+    if tags:               create_or_condition("tags", tags)
+    if artists:            create_or_condition("artist", artists)
+    if categories:         create_or_condition("category", categories)
+    if compatible_figures: create_or_condition("compatible_figures", compatible_figures)
 
     # Return the final filter structure for the ChromaDB query
     if not and_conditions:
@@ -80,9 +79,7 @@ class ChromaDbManager:
             metadata={"hnsw:space": "cosine"},  # Example for 768-dim embeddings
         )
 
-        print ('Opening Chroma DB:')
-        print (f' db path ............. [ {self.chroma_db_path}]')
-        print (f' collection........... [ {self.collection_name}]')
+        logger.info(f"ChromaDB opened — path: {self.chroma_db_path!r}, collection: {self.collection_name!r}")
         
         
     def _clean_metadata(self, item: dict) -> dict:
@@ -100,24 +97,25 @@ class ChromaDbManager:
                 clean[key] = value
         return clean
     
-    def delete_collection(self, collection_name=None) -> None:
-        """ Deletes the specified collection from ChromaDB. If no name is provided, deletes the default collection
-        
-        Args:
-            collection_name (str, optional): Name of the collection to delete. Defaults to None.
+    def get_all_ids(self) -> set:
+        """Returns the set of all document IDs currently stored in the collection."""
+        return set(self.collection.get(include=[])["ids"])
 
-        Raises:
-            Exception: If deletion fails, the original exception is raised.
+    def reset_collection(self) -> None:
+        """Deletes and recreates the default collection, leaving it empty and ready for a fresh index.
+
+        Updates self.collection so existing references stay valid.
         """
+        logger.info(f"Resetting ChromaDB collection {self.collection_name!r}...")
         try:
-            if collection_name is None:
-                cname = self.collection_name
-            else:
-                cname = collection_name 
-
-            self.client.delete_collection(name=cname)
-        except Exception as e:
-           raise e
+            self.client.delete_collection(name=self.collection_name)
+        except Exception:
+            logger.warning(f"Collection {self.collection_name!r} did not exist; nothing to delete.")
+        self.collection = self.client.get_or_create_collection(
+            name=self.collection_name,
+            metadata={"hnsw:space": "cosine"},
+        )
+        logger.info(f"Collection {self.collection_name!r} reset and ready.")
 
     def search(
         self,
@@ -128,7 +126,7 @@ class ChromaDbManager:
         compatible_figures: Optional[List[str]] = None,
         limit: int = 10,
         offset: int = 0,
-        score_threshold: float = 2.0,  # Using a permissive default
+        score_threshold: float = 1.0,
         sort_by: str = "relevance",
         sort_order: str = "descending",
     ):
@@ -143,8 +141,10 @@ class ChromaDbManager:
             limit (int, optional): Number of results to return. Defaults to 10. Max 100.
             offset (int, optional): Offset for pagination. Defaults to 0.           
             score_threshold (float, optional): Maximum distance for a result to be considered relevant. Defaults to 2.0.
-            sort_by (str, optional): Field to sort by ('relevance' or metadata field). Defaults to 'relevance'.
-            sort_order (str, optional): 'ascending' or 'descending'. Defaults to 'descending'.  
+            sort_by (str, optional): Field to sort by. Use 'relevance' for cosine-distance order
+                (default), or any metadata field name (e.g. 'name', 'artist').
+            sort_order (str, optional): 'ascending' or 'descending'. Only applied when
+                sort_by is not 'relevance'. Defaults to 'descending'.
         
         Returns:
             dict: Search results including total hits, limit, offset, and list of results.
@@ -165,7 +165,7 @@ class ChromaDbManager:
             compatible_figures=compatible_figures,
         )
         if where_filter:
-            print(f"DEBUG: Applying metadata filter: {where_filter}")
+            logger.debug(f"Applying metadata filter: {where_filter}")
 
         # Fetch a larger number of results to allow for post-filtering, sorting, and pagination
         query_limit = (offset + limit) * 5 + 20  # A generous buffer
@@ -190,6 +190,7 @@ class ChromaDbManager:
                         {
                             "id": results["ids"][0][i],
                             "distance": dist,
+                            "relevance_score": round(1.0 - dist, 4),
                             "metadata": results["metadatas"][0][i],
                         }
                     )
@@ -207,7 +208,7 @@ class ChromaDbManager:
         # --- 6. Apply Pagination and Return ---
         paginated_results = processed_results[offset : offset + limit]
 
-        print (f'DEBUG: Result set = {len(paginated_results)}')
+        logger.debug(f"Result set size: {len(paginated_results)}")
 
         return {
             "total_hits": len(processed_results),
@@ -238,40 +239,21 @@ class ChromaDbManager:
         documents_to_upsert = [p["embedding_text"] for p in valid_products]
 
         # --- 4. Generate All Embeddings in a Single Batch ---
-        print(f"Generating embeddings for {len(texts_to_embed)} documents...")
-        # 'is_query=False' tells the utility these are documents for storage
+        logger.info(f"Generating embeddings for {len(texts_to_embed)} documents...")
         embedding_list = generate_embeddings(texts_to_embed, is_query=False).tolist()
-        print("Embeddings generated successfully.")
+        logger.info("Embeddings generated successfully.")
 
-        # --- 5. Prepare Metadata and IDs ---
-        #ids = [str(p["sku"]) for p in valid_products]
-        #documents = [p["embedding_text"] for p in valid_products]
-
-        metadatas = []
-        for item in valid_products:
-            clean_meta = {}
-            for key, value in item.items():
-                # Ensure all metadata values are simple types for ChromaDB
-                if value is not None and isinstance(value, (str, int, float, bool)):
-                    clean_meta[key] = value
-            metadatas.append(clean_meta)
-
-        # --- 6. Upsert the Batch into ChromaDB ---
-        # Note: ChromaDB batches automatically, but we do it here for clarity.
-        # For very large datasets (>10k), you might want to loop in smaller batches.
+        # --- 5. Upsert the Batch into ChromaDB ---
         try:
             self.collection.upsert(
                 ids=ids_to_upsert,
-                embeddings=embedding_list, 
-                documents=documents_to_upsert, 
-                metadatas=metadatas_to_upsert, 
+                embeddings=embedding_list,
+                documents=documents_to_upsert,
+                metadatas=metadatas_to_upsert,
             )
-            print(f"\n--- Success! ---")
-            print(
-                f"Upserted {len(ids_to_upsert)} documents into ChromaDB collection '{self.collection_name}'."
-            )
+            logger.info(f"Upserted {len(ids_to_upsert)} documents into collection '{self.collection_name}'.")
         except Exception as e:
-            print(f"An error occurred while publishing to ChromaDB: {e}")
+            logger.error(f"Error publishing to ChromaDB: {e}")
             return False
 
         return True
@@ -309,25 +291,20 @@ class ChromaDbManager:
                 category_counter.update([category])
 
             def parse_and_update_counter(field_name: str, counter: Counter):
-                json_string = meta.get(field_name)
-                if json_string:
+                value = meta.get(field_name)
+                if value:
                     try:
-                        item_list = []
-                        if isinstance(json_string, str):
-                            item_list = json_string.split(",")
-                        elif isinstance(json_string, list):
-                            item_list = json.loads(json_string)
-
-                        item_list=[x.strip() for x in item_list if x]
-                        #print (f"CHECK {item_list}")
-                        counter.update(item_list)
-                    except (json.JSONDecodeError, TypeError):   
-                        print (f"MALFORMED data {type(json_string)} {json_string}")
+                        if isinstance(value, list):
+                            item_list = value
+                        else:
+                            item_list = str(value).split(",")
+                        counter.update(x.strip() for x in item_list if x.strip())
+                    except TypeError:
                         pass  # Ignore malformed data
 
             parse_and_update_counter("tags", tag_counter)
             parse_and_update_counter("artist", artist_counter)
-            parse_and_update_counter("compatibility", figure_counter)
+            parse_and_update_counter("compatible_figures", figure_counter)
 
 
         # We need to reduce the tag list because it may be very long when it contains small counts

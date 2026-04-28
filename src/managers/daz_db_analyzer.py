@@ -1,8 +1,11 @@
+import logging
 import os
 import psycopg2
 import psycopg2.extras
 from dotenv import load_dotenv
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 class DazDBAnalyzer:
     """Manages connections and queries to a PostgreSQL database for DAZ 3D content.
@@ -54,27 +57,28 @@ class DazDBAnalyzer:
 
     def __init__(self):        
         """Initializes the DazDBAnalyzer with database configuration from environment variables.
-        Expects the following environment variables to be set:  
+        Expects the following environment variables to be set:
             - DB_NAME
             - DB_USER
-            - DB_PASS
             - DB_HOST
             - DB_PORT
+            - DB_PASS  (optional — DAZ Studio's default dzcms account has no password)
             - BATCH_SIZE (optional, defaults to 512)
         """
-        try:
-            db_config = {
-                "dbname": os.environ['DB_NAME'], 
-                "user": os.environ['DB_USER'], 
-                "password": os.environ['DB_PASS'], 
-                "host": os.environ['DB_HOST'], 
-                "port": os.environ['DB_PORT']
-            }
-        except KeyError as e: 
-            print(f"Error: Missing environment variable {e}.")
-            return
+        required = ("DB_NAME", "DB_USER", "DB_HOST", "DB_PORT")
+        missing = [k for k in required if not os.environ.get(k)]
+        if missing:
+            raise EnvironmentError(
+                f"DazDBAnalyzer: missing required environment variable(s): {', '.join(missing)}"
+            )
 
-        self.db_config = db_config
+        self.db_config = {
+            "dbname":   os.environ["DB_NAME"],
+            "user":     os.environ["DB_USER"],
+            "password": os.environ.get("DB_PASS", ""),
+            "host":     os.environ["DB_HOST"],
+            "port":     os.environ["DB_PORT"],
+        }
         self.batch_size = int(os.getenv("BATCH_SIZE", 512))
 
     def _execute_query(self, sql, params=None):
@@ -96,7 +100,7 @@ class DazDBAnalyzer:
                     if cur.description:
                         results = cur.fetchall()
         except psycopg2.Error as e:
-            print(f"PostgreSQL Database error: {e}")
+            logger.error(f"PostgreSQL error: {e}")
             return None
         return [dict(row) for row in results]
 
@@ -106,11 +110,65 @@ class DazDBAnalyzer:
         Returns:
             list: A list of all SKUs in the database as strings.
         """
-        print("Fetching all valid SKUs from PostgreSQL...")
-        # This query now filters out both NULL and empty strings
+        logger.info("Fetching all valid SKUs from PostgreSQL...")
         sql = "SELECT token FROM dzcontent.product WHERE token IS NOT NULL AND token != ''"
         results = self._execute_query(sql)
         return [row['token'] for row in results] if results else []
+
+    def count_skus(self) -> int:
+        """Returns the count of distinct SKUs in PostgreSQL.
+
+        Uses DISTINCT to match the deduplication applied by get_all_skus(), since
+        multiple product rows can share the same token.
+
+        Returns:
+            int: Number of distinct non-null, non-empty SKUs, or -1 on error.
+        """
+        sql = "SELECT COUNT(DISTINCT token) AS n FROM dzcontent.product WHERE token IS NOT NULL AND token != ''"
+        results = self._execute_query(sql)
+        if results is None:
+            return -1
+        return results[0]['n'] if results else 0
+
+    def get_content_roots(self) -> list:
+        """Returns all content root directories from the DAZ CMS database.
+
+        Returns:
+            list: A list of absolute path strings (e.g. ['X:/DAZ Libraries/Project', ...]).
+        """
+        sql = 'SELECT "fldBasePath" FROM dzcontent."tblBasePath" ORDER BY "RecID"'
+        results = self._execute_query(sql)
+        return [r['fldBasePath'] for r in results] if results else []
+
+    def get_asset_files_by_sku(self, sku: str) -> list:
+        """Returns all asset files for a given product SKU from the DAZ CMS database.
+
+        Each result contains the relative path within the content directory,
+        the filename, and the content type label. The caller is responsible for
+        combining path + filename with a content root to get an absolute disk path.
+
+        Args:
+            sku (str): The product SKU (token) to look up.
+
+        Returns:
+            list: A list of dicts with keys: path, filename, content_type.
+                  Returns an empty list if the SKU is not found.
+        """
+        sql = """
+            SELECT
+                c.path,
+                c.filename,
+                ct."fldType" AS content_type
+            FROM dzcontent.content AS c
+            JOIN dzcontent.product AS p ON p.id = c.product_id
+            LEFT JOIN dzcontent."tblType" AS ct ON c.content_type_id = ct."RecID"
+            WHERE p.token = %s
+              AND c.filename IS NOT NULL
+              AND c.filename != ''
+            ORDER BY c.path, c.filename
+        """
+        results = self._execute_query(sql, (sku,))
+        return results if results is not None else []
 
     def get_products_by_sku_list(self, skus):
         """Fetches full product data for a given list of SKUs, handling batching.
@@ -123,7 +181,7 @@ class DazDBAnalyzer:
         """
         if not skus:
             return []
-        print(f"Fetching full data for {len(skus)} products from PostgreSQL...")
+        logger.info(f"Fetching full data for {len(skus)} products from PostgreSQL...")
         all_products = []
         for i in range(0, len(skus), self.batch_size):
             sku_batch = skus[i:i + self.batch_size]

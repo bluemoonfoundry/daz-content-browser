@@ -1,7 +1,17 @@
 import argparse
 import json
+import logging
 import os
 
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeRemainingColumn,
+)
 
 from output_formatters import print_pretty, print_json, print_table
 from utilities import open_daz_product
@@ -11,10 +21,37 @@ from managers.managers import chroma_db_manager
 
 def load_command(args):
     """Loads data from DAZ Postgres to SQLite and ChromaDB."""
-
-    print("Starting load command...")
     from managers.postgres_db_manager import main as load_dazdb_content
-    load_dazdb_content(args)
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold cyan]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TaskProgressColumn(),
+        TimeRemainingColumn(),
+    ) as progress:
+        etl_task = progress.add_task("ETL       ", total=None)
+        embed_task = progress.add_task("Embedding ", total=None, visible=False)
+
+        def on_progress(stage: str, current: int, total: int, detail: str = ""):
+            if stage == "etl":
+                progress.update(
+                    etl_task,
+                    total=total,
+                    completed=current,
+                    description=f"ETL  {detail[:35]:<35}",
+                )
+            elif stage == "embed":
+                progress.update(
+                    embed_task,
+                    visible=True,
+                    total=total,
+                    completed=current,
+                    description="Embedding ",
+                )
+
+        load_dazdb_content(args, on_progress=on_progress)
 
 def query_command(args):
     """Submits a query to the ChromaDB and prints the formatted results."""
@@ -49,8 +86,6 @@ def stats_command(args):
     if stats is None:
         return
     
-    #print (json.dumps(stats, indent=2))
-
     print("\n--- ChromaDB Collection Stats ---")
     print(f"Total Documents Indexed: {stats['total_docs']}")
     print(f"Last Document Update:    {stats['last_update']}")
@@ -59,7 +94,6 @@ def stats_command(args):
     if stats["histograms"]:
         
         for key in stats["histograms"]:
-            #print (f"MARK {key} = {stats['histograms'][key]}")
             histogram = list(stats["histograms"][key])
             llen = len(histogram)
             maxlen = llen
@@ -87,11 +121,16 @@ def server_command(args):
     else:
         print("--- Starting server in Production Mode ---")
         os.environ["APP_MODE"] = "production"
-    uvicorn.run("server:app", host=args.host, port=args.port, reload=True)
+    uvicorn.run("server:app", host=args.host, port=args.port, reload=args.demo)
 
 def main():
-    """Main entry point for the CLI application.""" 
-    
+    """Main entry point for the CLI application."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
     parser = argparse.ArgumentParser(
         description="Visual Asset Browser Data Pipeline CLI"
     )
@@ -131,7 +170,7 @@ def main():
     parsers["query"].add_argument(
         "--sort-order", choices=["ascending", "descending"], default="descending"
     )
-    parsers["query"].add_argument("--categories", type=str, default=None)
+    parsers["query"].add_argument("--categories", nargs='*', help="List of categories to filter by.")
     parsers["query"].add_argument(
         "--format",
         choices=['pretty', 'json', 'table'],

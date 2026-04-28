@@ -26,7 +26,7 @@ class SQLiteWrapper:
         """
 
         if force_reset and os.path.exists(self.sqlite_db_path):
-            print("--force flag detected. Deleting existing SQLite database. {force_reset} {os.path.exists(self.sqlite_db_path)}")
+            self._logger.info(f"--force: deleting existing SQLite database at {self.sqlite_db_path!r}")
             os.remove(self.sqlite_db_path)
 
         conn = self.get_connection()
@@ -41,7 +41,7 @@ class SQLiteWrapper:
         ''')
         conn.commit()
         conn.close()
-        print(f"SQLite database '{self.sqlite_db_path}' and table '{self.sqlite_db_table}' are ready.")
+        self._logger.info(f"SQLite database '{self.sqlite_db_path}' / table '{self.sqlite_db_table}' ready.")
 
     def get_connection(self):
         """Establishes and returns a connection to the SQLite database."""
@@ -50,8 +50,6 @@ class SQLiteWrapper:
         try:
             self.connection = sqlite3.connect(self.sqlite_db_path)
             self.connection.row_factory = sqlite3.Row
-            #print (f"Connected to SQLite database at {self.sqlite_db_path}")
-            #print (f"SQLite DB Table = {self.sqlite_db_table}")
         except sqlite3.OperationalError as e:
             self._logger.error(f"Error connecting to SQLite: {e}")
             raise e
@@ -114,43 +112,46 @@ class SQLiteWrapper:
             conn.close()
         return results
 
-    def execute_fetchone_query(self, query:str):
+    def execute_fetchone_query(self, query: str):
         """Executes a query and returns a single result.
 
         Args:
-            query (str): The SQL query to execute.  
+            query (str): The SQL query to execute.
 
-        Returns:    
+        Returns:
             any: The first column of the first row of the result, or None if no result.
         """
-
-        content=None
+        conn = self.get_connection()
         try:
-            cursor = self.connection.cursor()
-            cursor.execute (query)
-            content = cursor.fetchone()[0]
+            cursor = conn.cursor()
+            cursor.execute(query)
+            row = cursor.fetchone()
+            return row[0] if row else None
         except sqlite3.OperationalError as e:
-            print(f"Error reading from SQLite: {e}")
+            self._logger.error(f"Error reading from SQLite: {e}")
+            return None
+        finally:
+            conn.close()
 
-        return content
-
-    def execute_fetchall_query(self, query:str) -> list:
+    def execute_fetchall_query(self, query: str) -> list:
         """Executes a query and returns all results.
 
         Args:
-            query (str): The SQL query to execute.  
+            query (str): The SQL query to execute.
 
-        Returns:    
+        Returns:
             list: A list of all rows returned by the query.
         """
-        content=[]
+        conn = self.get_connection()
         try:
-            cursor = self.connection.cursor()
-            cursor.execute (query)
-            content = cursor.fetchall()
+            cursor = conn.cursor()
+            cursor.execute(query)
+            return cursor.fetchall()
         except sqlite3.OperationalError as e:
-            print(f"Error reading from SQLite: {e}")
-        return content
+            self._logger.error(f"Error reading from SQLite: {e}")
+            return []
+        finally:
+            conn.close()
     
     def count(self) -> int:
         """Returns the total number of rows in the SQLite table."""
@@ -163,43 +164,179 @@ class SQLiteWrapper:
 
     def get_sku_row(self, sku) -> dict|None:
         """Fetches the full row for a given SKU from SQLite.
-        
-        Args:
-            sku (str): The SKU to fetch data for.   
 
-        Returns:    
+        Args:
+            sku (str): The SKU to fetch data for.
+
+        Returns:
             dict|None: A dictionary containing the product data for the given SKU, or None if not found.
-        
+
         """
-        q = f"SELECT * from {self.sqlite_db_table} where sku = '{sku}'"
-        content = self.execute_fetchall_query (q)
-        if len(content) > 0:
-            return content[0]
-        else:
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                f"SELECT * FROM {self.sqlite_db_table} WHERE sku = ?", (sku,)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        except sqlite3.OperationalError as e:
+            self._logger.error(f"Error querying SQLite: {e}")
             return None
+        finally:
+            conn.close()
         
-    def get_post_checkpoint_rows(self, columns, checkpoint:str) -> list[dict]:
+    def get_post_checkpoint_rows(self, columns: list[str], checkpoint: str) -> list[dict]:
         """Fetches all rows updated after a given checkpoint timestamp.
 
         Args:
-            columns (str): Comma-separated list of columns to retrieve.
-            checkpoint (str): ISO 8601 formatted timestamp string.  
+            columns (list[str]): List of column names to retrieve.
+            checkpoint (str): ISO 8601 formatted timestamp string.
 
         Returns:
             list[dict]: A list of dictionaries representing the rows updated after the checkpoint.
         """
+        allowed = {
+            "sku", "url", "image_url", "store", "name", "artist", "price", "description",
+            "tags", "formats", "poly_count", "textures_info", "required_products",
+            "compatible_figures", "compatible_software", "embedding_text", "last_updated",
+            "category", "subcategories", "styles", "inferred_tags", "enriched_at", "mature",
+        }
+        for col in columns:
+            if col not in allowed:
+                raise ValueError(f"Invalid column name: {col!r}")
 
-        content=[]
+        col_clause = ", ".join(columns)
         q = f"""
-        select {columns}
-        from {self.sqlite_db_table}
-        where Datetime(last_updated) > Datetime("{checkpoint}")
+        SELECT {col_clause}
+        FROM {self.sqlite_db_table}
+        WHERE Datetime(last_updated) > Datetime(?)
         """
-
-        print (f"QUERY = [{q}]")
-        rows = self.execute_fetchall_query (q)
-        return  [dict(zip(row.keys(), row)) for row in rows]
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(q, (checkpoint,))
+            rows = cursor.fetchall()
+            return [dict(zip(row.keys(), row)) for row in rows]
+        except sqlite3.OperationalError as e:
+            self._logger.error(f"Error querying SQLite: {e}")
+            return []
+        finally:
+            conn.close()
         
+    def get_filter_values(self) -> dict:
+        """Returns distinct values for every filterable search field.
+
+        Cheaper than loading all ChromaDB metadata — queries SQLite directly.
+        Comma-separated fields (compatible_figures, tags, artist) are split and deduplicated.
+
+        Returns:
+            dict: Keys 'categories', 'compatible_figures', 'artists', each a sorted list of strings.
+        """
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+
+            cursor.execute(
+                f"SELECT DISTINCT category FROM {self.sqlite_db_table} "
+                "WHERE category IS NOT NULL AND category != ''"
+            )
+            categories = sorted(r[0] for r in cursor.fetchall())
+
+            def _split_all(sql) -> list:
+                cursor.execute(sql)
+                result = set()
+                for (value,) in cursor.fetchall():
+                    for part in value.split(","):
+                        if part.strip():
+                            result.add(part.strip())
+                return sorted(result)
+
+            artists = _split_all(
+                f"SELECT artist FROM {self.sqlite_db_table} "
+                "WHERE artist IS NOT NULL AND artist != ''"
+            )
+            figures = _split_all(
+                f"SELECT compatible_figures FROM {self.sqlite_db_table} "
+                "WHERE compatible_figures IS NOT NULL AND compatible_figures != ''"
+            )
+
+            return {"categories": categories, "artists": artists, "compatible_figures": figures}
+        except Exception as e:
+            self._logger.error(f"Error fetching filter values: {e}")
+            return {"categories": [], "artists": [], "compatible_figures": []}
+        finally:
+            conn.close()
+
+    def get_products(
+        self,
+        page: int = 1,
+        page_size: int = 25,
+        category: str | None = None,
+        artist: str | None = None,
+        compatible_figure: str | None = None,
+        sort_by: str = "name",
+        sort_dir: str = "asc",
+    ) -> dict:
+        """Returns a paginated, filtered, sorted list of products.
+
+        Returns:
+            dict: Keys 'products' (list of row dicts), 'total', 'page', 'page_size', 'total_pages'.
+        """
+        valid_sort = {"name", "install_date", "last_updated", "artist"}
+        sort_col = sort_by if sort_by in valid_sort else "name"
+        if sort_col == "install_date":
+            sort_col = "enriched_at"
+        order = "ASC" if sort_dir.lower() == "asc" else "DESC"
+
+        conditions: list[str] = []
+        params: list = []
+
+        if category:
+            conditions.append("category = ?")
+            params.append(category)
+        if artist:
+            conditions.append("(artist LIKE ? OR artist LIKE ? OR artist LIKE ? OR artist = ?)")
+            params += [f"%,{artist},%", f"{artist},%", f"%,{artist}", artist]
+        if compatible_figure:
+            cf = compatible_figure
+            conditions.append(
+                "(compatible_figures LIKE ? OR compatible_figures LIKE ? "
+                "OR compatible_figures LIKE ? OR compatible_figures = ?)"
+            )
+            params += [f"%,{cf},%", f"{cf},%", f"%,{cf}", cf]
+
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"SELECT COUNT(*) FROM {self.sqlite_db_table} {where}", params
+            )
+            total = cursor.fetchone()[0]
+
+            offset = (page - 1) * page_size
+            cursor.execute(
+                f"SELECT * FROM {self.sqlite_db_table} {where} "
+                f"ORDER BY {sort_col} {order} LIMIT ? OFFSET ?",
+                params + [page_size, offset],
+            )
+            rows = [dict(r) for r in cursor.fetchall()]
+            total_pages = max(1, (total + page_size - 1) // page_size)
+            return {
+                "products": rows,
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": total_pages,
+            }
+        except Exception as e:
+            self._logger.error(f"Error in get_products: {e}")
+            return {"products": [], "total": 0, "page": page, "page_size": page_size, "total_pages": 1}
+        finally:
+            conn.close()
+
     def insert_item(self, item):
         """Inserts or updates a product item in the SQLite database.
 
@@ -210,8 +347,9 @@ class SQLiteWrapper:
             if isinstance(value, list):
                 item[key] = json.dumps(value)
 
-        # Add the update timestamp
-        item["last_updated"] = datetime.now(timezone.utc).isoformat()
+        # Only set last_updated if the caller didn't provide one
+        if not item.get("last_updated"):
+            item["last_updated"] = datetime.now(timezone.utc).isoformat()
 
         # Prepare columns and placeholders for upsert
         columns = ", ".join(item.keys())
@@ -219,26 +357,19 @@ class SQLiteWrapper:
         table = self.sqlite_db_table
         sql = f"INSERT OR REPLACE INTO {table} ({columns}) VALUES ({placeholders})"
 
+        conn = self.get_connection()
         try:
-            cursor = self.connection.cursor()
+            cursor = conn.cursor()
             cursor.execute(sql, list(item.values()))
-            self.connection.commit()
+            conn.commit()
             return True
         except Exception as e:
-            print (
-                f'Error: SQLite exception: {e}'
-            )
+            self._logger.error(f"SQLite exception: {e}")
             return False
+        finally:
+            conn.close()
         
     def close(self):
         """Closes the SQLite database connection."""
         self.connection.close()
 
-if __name__ == '__main__':
-
-    from managers import sqlite_db
-    checkpoint = "2025-09-29T02:27:07.867181+00:00"
-
-    #rv = sqlite_db.count()
-    rv = sqlite_db.get_post_checkpoint_rows(checkpoint)
-    print (f"SQLM: RV={rv}")

@@ -1,32 +1,38 @@
+import logging
 import os
 from numpy import ndarray
 from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
 load_dotenv()
 
-EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "mixedbread-ai/mxbai-embed-large-v1")
+logger = logging.getLogger(__name__)
 
-# --- Global Model Cache ---
-# This ensures the model is only loaded into memory once per process.
+EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "mixedbread-ai/mxbai-embed-large-v1")
+EMBEDDING_DEVICE = os.getenv("EMBEDDING_DEVICE", "cpu")
+
+# Global model cache — loaded once per process.
 _model = None
 
 
 def get_embedding_model() -> SentenceTransformer:
-    """ Loads and caches the embedding model specified in the .env file. 
+    """Loads and caches the embedding model specified in the .env file.
+
+    The device is set explicitly via EMBEDDING_DEVICE to avoid a meta-tensor
+    error that occurs when 'accelerate' is installed and SentenceTransformer's
+    auto device-detection initialises weights on a meta device first.
     """
     global _model
     if _model is None:
-        # Default to the recommended model if not specified in .env
-        print(f"--- Loading embedding model: {EMBEDDING_MODEL_NAME} ---")
-        # You can specify the device, e.g., device='cuda', if you have a GPU
-        _model = SentenceTransformer(EMBEDDING_MODEL_NAME)
-        print("--- Embedding model loaded. ---")
+        logger.info(f"Loading embedding model: {EMBEDDING_MODEL_NAME} on device: {EMBEDDING_DEVICE}")
+        _model = SentenceTransformer(EMBEDDING_MODEL_NAME, device=EMBEDDING_DEVICE)
+        logger.info("Embedding model loaded.")
     return _model
 
 
 def generate_embeddings(texts, is_query: bool = False) -> ndarray:
-    """ Generates embeddings for a given text or list of texts Handles model-specific prefixes for query vs. passage.
+    """Generates embeddings for a given text or list of texts.
 
+    Handles model-specific prefixes for query vs. passage.
 
     Args:
         texts (str or list[str]): The text(s) to embed.
@@ -37,7 +43,7 @@ def generate_embeddings(texts, is_query: bool = False) -> ndarray:
     """
     model = get_embedding_model()
 
-    print(f"+++ Using {EMBEDDING_MODEL_NAME} for embedding +++")
+    logger.debug(f"Generating embeddings with {EMBEDDING_MODEL_NAME}")
 
     if "mxbai" in EMBEDDING_MODEL_NAME and is_query:
         # Ensure that if a list is passed, we prefix each item

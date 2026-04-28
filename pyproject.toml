@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "visual-asset-browser"
+version = "1.0.0"
+authors = [
+  { name="Your Name", email="you@example.com" },
+]
+description = "A semantic search and enrichment pipeline for a 3D asset library."
+readme = "README.md"
+requires-python = ">=3.11"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+# --- Core Dependencies ---
+# These are required for the server and base functionality to run.
+dependencies = [
+    "scrapy",
+    "scrapy-playwright",
+    "fastapi",
+    "uvicorn[standard]",
+    "python-multipart",
+    "pydantic",
+    "chromadb",
+    "python-dotenv", # Correct package name
+    "rich",          # For table formatting in the CLI
+    "huggingface-hub",
+    "numpy==2.3.0"   # Pinning numpy to resolve conflicts
+]
+
+# --- Optional Dependencies for LLM Functionality ---
+[project.optional-dependencies]
+
+# Libraries for running local models (both embedding and generation)
+local_llm = [
+    "transformers",
+    "accelerate",
+    "bitsandbytes",
+    "sentence-transformers", # For embedding models
+    "outlines==0.0.36",      # For structured generation
+    "datasets",              # Often a dependency for transformers/tokenizers
+    "einops"                 # Often a dependency for transformers models
+]
+
+# Libraries for using the OpenAI API
+openai = [
+    "openai",
+]
+
+# A convenient group to install all possible LLM providers
+all_llms = [
+    "visual-asset-browser[local_llm]",
+    "visual-asset-browser[openai]",
+]
+
+
+[project.scripts]
+vab = "main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = { find = { where = ["src"] } }
