@@ -1,0 +1,3 @@
+[submodule "ui/src"]
+	path = ui/src
+	url = https://github.com/bluemoonfoundry/bmf-daz-content-browser-ui.git

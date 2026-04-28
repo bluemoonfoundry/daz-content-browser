@@ -91,3 +91,9 @@ settings.json
 chroma_db/
 models/
 ui/dist/
+
+# --- Local SQLite databases ---
+*.db
+
+# --- Build artifacts ---
+build/

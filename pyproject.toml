@@ -58,6 +58,12 @@ all_llms = [
     "visual-asset-browser[openai]",
 ]
 
+# Testing
+testing = [
+    "pytest",
+    "httpx",   # required by FastAPI TestClient
+]
+
 
 [project.scripts]
 vab = "main:main"
