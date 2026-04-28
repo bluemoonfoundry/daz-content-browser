@@ -76,3 +76,18 @@ logs/
 # Annoying system files that should be ignored globally.
 .DS_Store
 Thumbs.db
+
+# --- Runtime artifacts ---
+nohup.out
+log.txt
+.checkpoint
+test.json
+products.json
+
+# --- User-specific settings (may contain credentials) ---
+settings.json
+
+# --- Local data directories (generated at runtime) ---
+chroma_db/
+models/
+ui/dist/

@@ -1,4 +1,7 @@
 
+// Daz Script to open a product in the Content Library pane
+// Usage: Call this script with the product name as the first argument
+// Example: App.runScript("path/to/OpenProductInContentLibrarySA.dsa", "Product Name")      
 
 function OpenDazProductInContentLibrarySA() {
 

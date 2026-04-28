@@ -1,33 +1,26 @@
+import logging
 import os
 import pathlib
 import subprocess
 import sys
-import datetime
-from datetime import timedelta, timezone
-from datetime import datetime
 import requests
+from bs4 import BeautifulSoup
 
+from dotenv import load_dotenv
+load_dotenv()
 
-CHECKPOINT_FILE = ".checkpoint"
+logger = logging.getLogger(__name__)
 
+def open_daz_product(args):
+    """ Opens a specified product in DAZ Studio's Content Library pane."""
+    product_name = args.product if args and args.product else None
 
-def get_checkpoint():
-    rv=None
-    if os.path.exists(CHECKPOINT_FILE):
-        with open(CHECKPOINT_FILE, "r") as f:
-            rv = f.read().strip()
+    if product_name is not None:
+        logger.info(f"Opening product '{product_name}' in DAZ Studio...")
+        return run_daz_script("OpenProductInContentLibrarySA.dsa", [args.product])
     else:
-        rv = (datetime.now(timezone.utc) - timedelta(days=365 * 10)).isoformat()
-
-    print (f'Checkpoint read: {rv}')
-    return rv
-
-
-def set_checkpoint():
-    with open(CHECKPOINT_FILE, "w") as f:
-        f.write(datetime.now(timezone.utc).isoformat())
-    print(f"Checkpoint updated to {get_checkpoint()}")
-
+        logger.error("No product name specified to open.")
+        return False
 
 def run_daz_script(script_name: str, script_args:list) -> bool:
     """
@@ -43,57 +36,31 @@ def run_daz_script(script_name: str, script_args:list) -> bool:
         # Find the DAZ Studio executable
         daz_root = os.getenv("DAZ_STUDIO_EXE_PATH")
         if not daz_root or not os.path.exists(daz_root):
-            print("Error: DAZ_STUDIO_EXE_PATH is not set correctly in the environment")
+            logger.error("DAZ_STUDIO_EXE_PATH is not set correctly in the environment")
             return False
-        
-        # Find the script and make sure it exists
-        script_directory = pathlib.Path(__file__).parent.resolve()
-        script_file = f"{script_directory}/{script_name}"
-        if not os.path.exists(script_file):
-            print(f"Error: DAZ script '{script_file}' not found.")
-            return False    
 
-        command_list = [
-            daz_root
-        ]
+        script_file = pathlib.Path(__file__).parent.resolve() / script_name
+        if not script_file.exists():
+            logger.error(f"DAZ script '{script_file}' not found.")
+            return False
 
+        command_list = [daz_root]
         for arg in script_args:
-            command_list.append("-scriptArg")
-            command_list.append(arg)
+            command_list.extend(["-scriptArg", arg])
+        command_list.append(str(script_file))
 
-        command_list.append(script_file)
-
-        # # Construct the script args
-        # script_args_parts = []
-        # for (i, arg) in enumerate(script_args):
-        #     script_args_parts.append (f"-scriptArg '{arg}'")
-
-        # script_args_complete = " ".join(script_args_parts)
-
-        # print(f"Executing DAZ Studio script: {script_file} {script_args_complete}")
-
-
-
-        # command_expanded = f"\"{daz_root}\" {script_args_complete} {script_file}"
-
-        #process = subprocess.Popen(command_expanded, shell=False)
-        process = subprocess.Popen(
-                command_list,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True, # Use text=True for string output, or omit for bytes
-                shell=False 
-            )
-                
-
-        process.wait()
-
+        subprocess.Popen(
+            command_list,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            shell=False,
+        )
         return True
     
     except Exception as e:
-        print(f"An unexpected error occurred while executing the DAZ script: {e}", file=sys.stderr)
+        logger.exception(f"Unexpected error executing DAZ script: {e}")
         return False
-
+    
 def fetch_json_from_url(url: str, timeout: int = 10) -> dict | None:
     """
     Fetches content from a URL, parses it as JSON, and returns it.
@@ -108,7 +75,7 @@ def fetch_json_from_url(url: str, timeout: int = 10) -> dict | None:
         dict | None: A dictionary containing the parsed JSON data if successful,
                       otherwise None.
     """
-    print(f"Fetching JSON from: {url}")
+    logger.debug(f"Fetching JSON from: {url}")
     try:
         # 1. Make the HTTP GET request with a timeout.
         response = requests.get(url, timeout=timeout)
@@ -122,25 +89,78 @@ def fetch_json_from_url(url: str, timeout: int = 10) -> dict | None:
         return response.json()
 
     except requests.exceptions.HTTPError as http_err:
-        # Handle specific HTTP status code errors (4xx/5xx).
-        print(f"Error: HTTP Error occurred: {http_err}", file=sys.stderr)
-        print(f"Status Code: {http_err.response.status_code}", file=sys.stderr)
+        logger.error(f"HTTP error fetching {url}: {http_err.response.status_code} {http_err}")
         return None
 
     except requests.exceptions.JSONDecodeError:
-        # Handle cases where the response is not valid JSON (e.g., it's HTML).
-        print(
-            f"Error: Failed to decode JSON. The content from the URL is not valid JSON.",
-            file=sys.stderr,
-        )
+        logger.error(f"Response from {url} is not valid JSON.")
         return None
 
     except requests.exceptions.RequestException as req_err:
-        # Handle broader network issues (e.g., DNS failure, connection refused, timeout).
-        print(f"Error: A network error occurred: {req_err}", file=sys.stderr)
+        logger.error(f"Network error fetching {url}: {req_err}")
         return None
 
     except Exception as e:
-        # A final catch-all for any other unexpected errors.
-        print(f"An unexpected error occurred: {e}", file=sys.stderr)
+        logger.exception(f"Unexpected error fetching {url}: {e}")
         return None
+
+
+def extract_meta_tags(text) -> dict:
+    """ Extracts meta tags from HTML text and returns them as a dictionary.
+    
+    Args:
+        text (str): The HTML text as a string.
+
+    Returns:
+        dict: A dictionary of meta tag attributes and their values.
+    """
+
+    soup = BeautifulSoup(text,'lxml')
+
+    meta_tags = soup.find_all('meta')
+
+    tag_attributes = {}
+   
+    for tag in meta_tags:
+        for attr in tag.attrs:
+            if attr not in ["name", "content", "itemprop", "property","value","http-equiv"]:
+                tag_attributes[attr] = tag.attrs[attr]
+            elif attr not in["content","value"]:
+                content = tag.get_attribute_list("content")[0]
+                tag_attributes[tag.attrs[attr]] = content if content else tag.get_attribute_list("value")[0]
+
+    return tag_attributes            
+
+def fetch_html_content(url:str) -> tuple:
+    """ Fetches HTML content from a URL and extracts meta tags.
+
+    Args:
+        url (str): The URL to fetch HTML content from.
+
+    Returns:
+        tuple: A tuple containing the HTML content as a string and a dictionary of meta tag attributes.
+    """
+
+    
+    html_content = None
+    tag_attributes = None
+    try:
+        response = requests.get(url, timeout=10)
+        
+        # Check if the request was successful (status code 200)
+        if response.status_code == 200:
+            # Get the HTML content of the page
+            html_content = response.text
+            tag_attributes = extract_meta_tags(html_content)
+            #print("HTML content fetched successfully!")
+            #print(html_content)  # Print the HTML content (optional)
+        else:
+            logger.warning(f"Failed to fetch {url}: status {response.status_code}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Network error fetching {url}: {e}")
+
+    return html_content, tag_attributes
+
+
+if __name__ == '__main__':
+   pass

@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm create *)",
+      "Bash(npm install *)",
+      "Bash(npx tailwindcss *)",
+      "Bash(npx tsc *)",
+      "Bash(npm run *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5173/)",
+      "Bash(python -c \"import ast, pathlib; ast.parse\\(pathlib.Path\\('src/server.py'\\).read_text\\(\\)\\); print\\('OK'\\)\")",
+      "WebFetch(domain:github.com)",
+      "Bash(python -c \"import ast, pathlib; ast.parse\\(pathlib.Path\\('src/server.py'\\).read_text\\(\\)\\); ast.parse\\(pathlib.Path\\('src/managers/daz_script_server.py'\\).read_text\\(\\)\\); ast.parse\\(pathlib.Path\\('src/managers/managers.py'\\).read_text\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(gh auth *)",
+      "Bash(gh repo *)",
+      "Bash(git remote *)",
+      "Bash(gh pr create --title 'Refactor to SQLite index, add DAZ Script Server integration, ship React UI' --body ' *)",
+      "Bash(git commit -m 'Update Claude project settings after remote migration *)"
+    ]
+  }
+}

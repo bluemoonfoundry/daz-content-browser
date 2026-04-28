@@ -1,150 +1,64 @@
 import argparse
 import json
+import logging
 import os
-import re
-from datetime import datetime, timedelta, timezone
+
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeRemainingColumn,
+)
+
 from output_formatters import print_pretty, print_json, print_table
-from collections import Counter
+from utilities import open_daz_product
 import uvicorn
-from dotenv import load_dotenv
 
-from utilities import get_checkpoint, set_checkpoint
-from database_utils import load_sqlite_to_chroma
-#from enrich_data import main as run_enrichment
-from fetch_daz_data import pre_fetch_faz_data, fetch_daz_data
-from fetch_daz_data import product_file
-from query_utils import get_db_stats, search
-from rebuild_chroma import main as run_rebuild
-from scraper_process import run_scraper
-
-load_dotenv()
-
-
-def slugify_regex(text: str) -> str:
-    """
-    Downcases a string and replaces all whitespace sequences with a dash
-    using regular expressions.
-
-    Args:
-        text: The input string to be processed.
-
-    Returns:
-        A slug version of the string.
-    """
-    # 1. Convert to lowercase
-    lower_text = text.lower()
-
-    # 2. Replace one or more whitespace characters (\s+) with a single dash
-    slug = re.sub(r"\s+", "-", lower_text)
-
-    # 3. (Optional) Remove leading/trailing dashes that might be created
-    return slug.strip("-")
-
-def fetch_command(args):
-    print("Starting fetch command...")
-    rv = pre_fetch_faz_data(args)
-    # if rv and args.prefetch_only == False:
-    #     rv = fetch_daz_data(args)
-    print("Fetch command complete.")
-    return rv
-
-
-def scrape_command(args):
-    print("Starting scrape command...")
-    dbfile = product_file
-
-    try:
-        with open(dbfile, "r") as f:
-            products = json.load(f)
-            print(f"Loaded {len(products)} products from {dbfile}.")
-    except FileNotFoundError:
-        print("Error: products.json not found. Run the 'fetch' command first.")
-        return
-
-    # --- THIS IS THE KEY CHANGE ---
-    # We now build a list of dictionaries, not just URLs.
-    products_to_scrape = []
-    if args.update:
-        checkpoint = get_checkpoint()
-        print(f"Update mode enabled. Scraping products installed after {checkpoint}.")
-        for product in products:
-            if product.get("date_installed", "1970-01-01T00:00:00Z") > checkpoint:
-                if product.get("url") and product.get("sku"):
-                    products_to_scrape.append(
-                        {
-                            "url": product["url"],
-                            "image_url": product["image_url"],
-                            "sku": product["sku"],
-                            "categoriesData": product.get("categoriesData", []),
-                            "figureData": product.get("figureData", []),
-                            "mature": product.get("mature", False),
-                        }
-                    )
-    else:
-        print("Update mode off. Scraping all products from products.json.")
-        products_to_scrape = [
-            {
-                "url": p["url"],
-                "image_url": p["image_url"],
-                "sku": p["sku"],
-                "categoriesData": p.get("categoriesData", []),
-                "figureData": p.get("figureData", []),
-                "mature": p.get("mature", False),
-            }
-            for p in products
-            if p.get("url") and p.get("sku")
-        ]
-
-    if args.limit and args.limit > 0:
-        print(
-            f"Applying limit: processing only the first {args.limit} of {len(products_to_scrape)} products."
-        )
-        products_to_scrape = products_to_scrape[: args.limit]
-
-    if products_to_scrape:
-        # Pass the entire list of product dicts
-        run_scraper(products_to_scrape)
-    else:
-        print("No new products to scrape based on the determined criteria.")
-
-
-def enrich_command(args):
-    #print("Starting LLM data enrichment process...")
-    #run_enrichment(args)
-    print
-
-
-def rebuild_command(args):
-    """
-    Performs a full, destructive rebuild of the ChromaDB collection
-    from the SQLite database.
-    """
-
-    # Add a confirmation prompt to prevent accidental data loss
-    confirm = input(
-        "WARNING: This will delete and rebuild the entire ChromaDB collection. "
-        "This can take a long time. Are you sure you want to continue? (yes/no): "
-    )
-    if confirm.lower() == "yes":
-        print("Starting full ChromaDB rebuild...")
-        run_rebuild()
-    else:
-        print("Rebuild cancelled.")
-
+from managers.managers import chroma_db_manager
 
 def load_command(args):
-    print("Starting load command...")
-    checkpoint = get_checkpoint()
-    load_sqlite_to_chroma(checkpoint) # type: ignore
-    set_checkpoint()
+    """Loads data from DAZ Postgres to SQLite and ChromaDB."""
+    from managers.postgres_db_manager import main as load_dazdb_content
 
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold cyan]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TaskProgressColumn(),
+        TimeRemainingColumn(),
+    ) as progress:
+        etl_task = progress.add_task("ETL       ", total=None)
+        embed_task = progress.add_task("Embedding ", total=None, visible=False)
+
+        def on_progress(stage: str, current: int, total: int, detail: str = ""):
+            if stage == "etl":
+                progress.update(
+                    etl_task,
+                    total=total,
+                    completed=current,
+                    description=f"ETL  {detail[:35]:<35}",
+                )
+            elif stage == "embed":
+                progress.update(
+                    embed_task,
+                    visible=True,
+                    total=total,
+                    completed=current,
+                    description="Embedding ",
+                )
+
+        load_dazdb_content(args, on_progress=on_progress)
 
 def query_command(args):
     """Submits a query to the ChromaDB and prints the formatted results."""
     print("Starting query command...")
 
     # The search function returns a dictionary with 'total_hits', 'results', etc.
-    response = search(
+    response = chroma_db_manager.search(
         prompt=args.prompt,
         tags=args.tags,
         limit=args.limit,
@@ -165,13 +79,13 @@ def query_command(args):
         print_pretty(response)
 
 def stats_command(args):
+    """Gathers and prints statistics about the ChromaDB collection."""
+
     print("Gathering statistics from the database...")
-    stats = get_db_stats()
+    stats = chroma_db_manager.get_db_stats()
     if stats is None:
         return
     
-    #print (json.dumps(stats, indent=2))
-
     print("\n--- ChromaDB Collection Stats ---")
     print(f"Total Documents Indexed: {stats['total_docs']}")
     print(f"Last Document Update:    {stats['last_update']}")
@@ -180,7 +94,6 @@ def stats_command(args):
     if stats["histograms"]:
         
         for key in stats["histograms"]:
-            #print (f"MARK {key} = {stats['histograms'][key]}")
             histogram = list(stats["histograms"][key])
             llen = len(histogram)
             maxlen = llen
@@ -197,6 +110,7 @@ def stats_command(args):
 
 
 def server_command(args):
+    """Runs the FastAPI web server."""
     if args.demo:
         print(
             "=" * 50
@@ -207,45 +121,24 @@ def server_command(args):
     else:
         print("--- Starting server in Production Mode ---")
         os.environ["APP_MODE"] = "production"
-    uvicorn.run("server:app", host=args.host, port=args.port, reload=True)
-
-
-def openproduct_command(args):
-    print("Starting openproduct command...")
-    from open_daz_product import main as open_daz_product
-
-    open_daz_product(args)
-
+    uvicorn.run("server:app", host=args.host, port=args.port, reload=args.demo)
 
 def main():
+    """Main entry point for the CLI application."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
     parser = argparse.ArgumentParser(
         description="Visual Asset Browser Data Pipeline CLI"
     )
-    parser.add_argument(
-        "--product-file",
-        type=str,
-        default="./products.json",
-        help="Path to JSON file containing product data.",
-    )
+
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # Define commands
     parsers = {
-        "fetch": subparsers.add_parser(
-            "fetch", help="Calls external library to create/update products.json."
-        ),
-        "scrape": subparsers.add_parser(
-            "scrape", help="Scrape products and save to SQLite."
-        ),
-        "enrich": subparsers.add_parser(
-            "enrich", help="Use an LLM to enrich product data."
-        ),
-        "rebuild": subparsers.add_parser(
-            "rebuild", help="Nuke and rebuild the entire ChromaDB from SQLite."
-        ),
-        "load": subparsers.add_parser(
-            "load", help="Load new data from SQLite into ChromaDB."
-        ),
         "query": subparsers.add_parser(
             "query", help="Query the ChromaDB vector store."
         ),
@@ -253,27 +146,13 @@ def main():
             "stats", help="Display stats about the ChromaDB collection."
         ),
         "server": subparsers.add_parser("server", help="Run the FastAPI web server."),
+        "load": subparsers.add_parser("load", help="Load data from DAZ Postgres to SQLite and ChromaDB."),
         "openproduct": subparsers.add_parser(
             "openproduct",
-            help="Open a naed DAZ product in DAZ Studio's Content Library Pane",
+            help="Open a named DAZ product in DAZ Studio's Content Library Pane",
         ),
+        
     }
-
-    # Add arguments
-    parsers["scrape"].add_argument(
-        "--update",
-        action="store_true",
-        help="Only scrape products newer than the last checkpoint.",
-    )
-    parsers["scrape"].add_argument(
-        "--limit",
-        type=int,
-        default=None,
-        help="Limit the number of URLs to process from the list.",
-    )
-
-    parsers["fetch"].add_argument("--prefetch-only", action="store_true", default=False,
-                                  help="Only fetch DAZ product metadata, do execute full database construction.")
 
     parsers["query"].add_argument("prompt", help="The search prompt.")
     parsers["query"].add_argument(
@@ -291,7 +170,7 @@ def main():
     parsers["query"].add_argument(
         "--sort-order", choices=["ascending", "descending"], default="descending"
     )
-    parsers["query"].add_argument("--categories", type=str, default=None)
+    parsers["query"].add_argument("--categories", nargs='*', help="List of categories to filter by.")
     parsers["query"].add_argument(
         "--format",
         choices=['pretty', 'json', 'table'],
@@ -306,7 +185,12 @@ def main():
     parsers["server"].add_argument(
         "--demo", action="store_true", help="Run server in demo mode."
     )
-    
+
+    parsers["load"].add_argument('--force', action='store_true', help="Force a complete rebuild of the SQLite database (implies --all).")
+    parsers["load"].add_argument('--all', action='store_true', help="Process all products from Postgres, not just new ones.")
+    parsers["load"].add_argument('--limit', type=int, help="Process only a limited number of products. Ideal for testing.")
+    parsers["load"].add_argument('--phase', type=str, choices=['test', 'etl', 'embed', 'all'], default='all', help="Run only a specific phase: 'etl', 'embed', or both if omitted.")
+
 
     parsers["openproduct"].add_argument(
         "--product", help="The name of the product to open in DAZ Studio."
@@ -314,15 +198,11 @@ def main():
 
     # Set default functions
     func_map = {
-        "fetch": fetch_command,
-        "scrape": scrape_command,
-        "enrich": enrich_command,
-        "rebuild": rebuild_command,
-        "load": load_command,
         "query": query_command,
         "stats": stats_command,
         "server": server_command,
-        "openproduct": openproduct_command,
+        "load": load_command,
+        "openproduct": open_daz_product,
     }
     for cmd, sub_parser in parsers.items():
         sub_parser.set_defaults(func=func_map[cmd])
