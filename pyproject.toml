@@ -28,6 +28,8 @@ dependencies = [
     "huggingface-hub",
     "requests",
     "psycopg2-binary",
+    "beautifulsoup4",
+    "lxml",
     "numpy==2.3.0",
 ]
 

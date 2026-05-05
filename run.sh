@@ -19,8 +19,8 @@ fi
 source .venv/bin/activate
 
 echo "Installing dependencies (first run may take several minutes)..."
-pip install torch --index-url https://download.pytorch.org/whl/cpu --quiet
-pip install ".[local_llm]" --quiet
+pip install torch --index-url https://download.pytorch.org/whl/cpu --quiet || { echo "ERROR: Dependency installation failed."; exit 1; }
+pip install ".[local_llm]" --quiet || { echo "ERROR: Dependency installation failed."; exit 1; }
 
 echo
 echo "To use a GPU instead, run after setup:"

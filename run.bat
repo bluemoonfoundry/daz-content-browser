@@ -21,8 +21,17 @@ if not exist ".venv" (
 call .venv\Scripts\activate.bat
 
 echo Installing dependencies (first run may take several minutes^)...
-pip install torch --index-url https://download.pytorch.org/whl/cpu --quiet
-pip install ".[local_llm]" --quiet
+pip install torch --index-url https://download.pytorch.org/whl/cpu --quiet || goto install_failed
+pip install ".[local_llm]" --quiet || goto install_failed
+goto install_ok
+
+:install_failed
+echo.
+echo ERROR: Dependency installation failed. Check the output above for details.
+pause
+exit /b 1
+
+:install_ok
 
 echo.
 echo To use a GPU instead, run after setup:
