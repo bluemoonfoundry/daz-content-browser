@@ -40,14 +40,10 @@ demo-server:         ## Run the FastAPI server in demo mode (no DB required)
 	$(PYTHON) vab.py server --demo
 
 open-server:         ## Run API server + Vite dev UI, open browser at :5173
-	$(PYTHON) vab.py server &
-	(sleep 5 && (open http://localhost:5173 2>/dev/null || xdg-open http://localhost:5173 2>/dev/null || true)) &
-	cd $(UI_SRC) && npm run dev
+	$(PYTHON) dev.py
 
 open-demo-server:    ## Run demo API server + Vite dev UI, open browser at :5173
-	$(PYTHON) vab.py server --demo &
-	(sleep 5 && (open http://localhost:5173 2>/dev/null || xdg-open http://localhost:5173 2>/dev/null || true)) &
-	cd $(UI_SRC) && npm run dev
+	$(PYTHON) dev.py --demo
 
 dev-ui:              ## Run the Vite dev server with hot reload at :5173 (proxies /api to :8000)
 	cd $(UI_SRC) && npm run dev
