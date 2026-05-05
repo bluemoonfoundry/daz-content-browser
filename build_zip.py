@@ -20,12 +20,8 @@ INCLUDE_FILES = [
     "pyproject.toml",
     "run.bat",
     "run.sh",
-    "run-ui.bat",
-    "run-ui.sh",
     "run-demo.bat",
     "run-demo.sh",
-    "run-demo-ui.bat",
-    "run-demo-ui.sh",
 ]
 
 

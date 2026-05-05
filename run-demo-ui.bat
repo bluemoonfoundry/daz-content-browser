@@ -2,41 +2,23 @@
 setlocal
 
 echo ================================================
-echo   Visual Asset Browser -- Demo Mode
+echo   Visual Asset Browser - Demo Dev Mode
+echo ================================================
+echo   API server  ->  http://localhost:8000  (demo)
+echo   UI (Vite)   ->  http://localhost:5173
 echo ================================================
 echo.
-
-python --version >nul 2>&1
-if errorlevel 1 (
-    echo ERROR: Python not found. Install Python 3.11+ from https://python.org
-    pause
-    exit /b 1
-)
-
-if not exist ".venv" (
-    echo Setting up virtual environment...
-    python -m venv .venv
-)
-
-call .venv\Scripts\activate.bat
-
-echo Installing dependencies...
-pip install . --quiet || goto install_failed
-goto install_ok
-
-:install_failed
-echo.
-echo ERROR: Dependency installation failed. Check the output above for details.
-pause
-exit /b 1
-
-:install_ok
-echo.
-echo Starting demo server at http://localhost:8000
-echo No database required in demo mode.
-echo Press Ctrl+C to stop.
+echo Tip: run 'make install' first if you haven't set up the environment.
 echo.
 
-start /B cmd /c "timeout /t 3 /nobreak >nul && start http://localhost:8000"
-python vab.py server --demo
-pause
+REM Start the API server in demo mode in a separate console window
+start "VAB API Server (demo)" python vab.py server --demo
+
+REM Give the server a moment to bind before opening the browser
+timeout /t 4 /nobreak >nul
+
+REM Open the browser to the Vite dev server
+start http://localhost:5173
+
+REM Run the Vite dev server in this window
+cd ui\src && npm run dev

@@ -2,36 +2,23 @@
 set -e
 
 echo "================================================"
-echo "  Visual Asset Browser"
+echo "  Visual Asset Browser - Dev Mode"
+echo "  API server  ->  http://localhost:8000"
+echo "  UI (Vite)   ->  http://localhost:5173"
 echo "================================================"
 echo
-
-if ! command -v python3 &>/dev/null; then
-    echo "ERROR: python3 not found. Install Python 3.11+ from https://python.org"
-    exit 1
-fi
-
-if [ ! -d ".venv" ]; then
-    echo "Setting up virtual environment..."
-    python3 -m venv .venv
-fi
-
-source .venv/bin/activate
-
-echo "Installing dependencies (first run may take several minutes)..."
-pip install torch --index-url https://download.pytorch.org/whl/cpu --quiet || { echo "ERROR: Dependency installation failed."; exit 1; }
-pip install ".[local_llm]" --quiet || { echo "ERROR: Dependency installation failed."; exit 1; }
-
-echo
-echo "To use a GPU instead, run after setup:"
-echo "  source .venv/bin/activate"
-echo "  pip install torch --index-url https://download.pytorch.org/whl/cu121"
-echo
-echo "Starting server at http://localhost:8000"
-echo "Press Ctrl+C to stop."
+echo "Tip: run 'make install' first if you haven't set up the environment."
 echo
 
-# Open browser after the server has had a moment to start
-(sleep 3 && (open http://localhost:8000 2>/dev/null || xdg-open http://localhost:8000 2>/dev/null || true)) &
+# Start API server in the background, capture its PID
+python vab.py server &
+SERVER_PID=$!
 
-python vab.py server
+# Kill the server when this script exits (Ctrl+C or normal exit)
+trap "echo ''; echo 'Stopping API server...'; kill $SERVER_PID 2>/dev/null; exit" INT TERM EXIT
+
+# Open browser once Vite is ready
+(sleep 5 && (open http://localhost:5173 2>/dev/null || xdg-open http://localhost:5173 2>/dev/null || true)) &
+
+# Run Vite dev server in the foreground — Ctrl+C stops both
+cd ui/src && npm run dev

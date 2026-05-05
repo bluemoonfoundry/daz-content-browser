@@ -2,32 +2,23 @@
 set -e
 
 echo "================================================"
-echo "  Visual Asset Browser -- Demo Mode"
+echo "  Visual Asset Browser - Demo Dev Mode"
+echo "  API server  ->  http://localhost:8000  (demo)"
+echo "  UI (Vite)   ->  http://localhost:5173"
 echo "================================================"
 echo
-
-if ! command -v python3 &>/dev/null; then
-    echo "ERROR: python3 not found. Install Python 3.11+ from https://python.org"
-    exit 1
-fi
-
-if [ ! -d ".venv" ]; then
-    echo "Setting up virtual environment..."
-    python3 -m venv .venv
-fi
-
-source .venv/bin/activate
-
-echo "Installing dependencies..."
-pip install . --quiet || { echo "ERROR: Dependency installation failed."; exit 1; }
-
-echo
-echo "Starting demo server at http://localhost:8000"
-echo "No database required in demo mode."
-echo "Press Ctrl+C to stop."
+echo "Tip: run 'make install' first if you haven't set up the environment."
 echo
 
-# Open browser after the server has had a moment to start
-(sleep 3 && (open http://localhost:8000 2>/dev/null || xdg-open http://localhost:8000 2>/dev/null || true)) &
+# Start API server in demo mode in the background
+python vab.py server --demo &
+SERVER_PID=$!
 
-python vab.py server --demo
+# Kill the server when this script exits
+trap "echo ''; echo 'Stopping API server...'; kill $SERVER_PID 2>/dev/null; exit" INT TERM EXIT
+
+# Open browser once Vite is ready
+(sleep 5 && (open http://localhost:5173 2>/dev/null || xdg-open http://localhost:5173 2>/dev/null || true)) &
+
+# Run Vite dev server in the foreground — Ctrl+C stops both
+cd ui/src && npm run dev
