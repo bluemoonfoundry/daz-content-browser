@@ -90,7 +90,7 @@ settings.json
 # --- Local data directories (generated at runtime) ---
 chroma_db/
 models/
-ui/dist/
+# ui/dist/ is committed so developers can run without building the UI submodule
 
 # --- Local SQLite databases ---
 *.db
