@@ -6,6 +6,11 @@ The server is the product. A web UI is included as a reference client and demons
 
 <img width="2387" height="1298" alt="Screenshot 2026-05-05 080942" src="https://github.com/user-attachments/assets/4caf9aae-5957-4a2a-9818-182e085d0dc6" />
 
+
+
+> [!NOTE]  
+> The reference web UI uses the Script Server DAZ plugin to allow users to open the DAZ content manager to a product page in a running DAZ Studio directly from a search result. It's not strictly necessary for searching, but to get full benefit consider installing the plugin. It's free and available here: https://github.com/bluemoonfoundry/daz-script-server/releases/latest
+
 ---
 
 ## What it does
