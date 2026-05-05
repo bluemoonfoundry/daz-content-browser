@@ -1,193 +1,253 @@
 # Visual Asset Browser (VAB)
 
-Welcome to the Visual Asset Browser! This is a powerful command-line tool designed to help you create a "smart" search engine for your entire DAZ Studio content library.
+Visual Asset Browser is a semantic search engine and browser for your DAZ Studio content library. Instead of hunting by product name, you describe what you want — "gritty cyberpunk outfit" or "soft fantasy lighting" — and VAB finds relevant assets from your own collection.
 
-Instead of just searching by keywords, VAB lets you search by *meaning* or "vibe." You can ask it for "gritty cyberpunk outfits" or "elegant fantasy scenes" and get relevant results from your own collection.
-
-This is an **example** of the kind of interfaces that could be supported:
 <img width="1482" height="768" alt="screenshot_med" src="https://github.com/user-attachments/assets/eb7fbd1c-8b56-404f-bb5d-ea682a6f9fb4" />
 
 ## Features
 
-*   **Semantic Search:** Find assets by describing what you want, not just by remembering a product name.
-*   **Hybrid Filtering:** Combine a "vibe" search with hard filters like "Genesis 9" or a specific artist.
-*   **DAZ Store Integration:** Automatically fetches and scrapes rich metadata for your official DAZ products.
-*   **3rd-Party Content Indexing:** Scans your local libraries to make content from Renderosity, Patreon, etc., fully searchable.
-*   **Scene Analysis:** Analyze a `.duf` scene file to see a complete list of the products you used.
-*   **API Server Mode:** Run VAB as a backend server to power a future web-based user interface.
-
-## Getting Started: Installation Guide
-
-Follow these steps to get VAB up and running. This process usually takes 15-30 minutes, with most of that time spent on automatic downloads.
-
-### Step 1: Install Python
-
-This tool is built with Python. If you don't have it, you'll need to install it first. We recommend **Python 3.11**.
-
-1.  Go to the [official Python website's download page for Windows](https://www.python.org/downloads/windows/).
-2.  Download the installer for the latest Python 3.11.x version.
-3.  Run the installer. **IMPORTANT:** On the first screen of the installer, make sure to check the box at the bottom that says **"Add Python to PATH"**. This is crucial!
-4.  Click "Install Now" and follow the prompts.
-
-### Step 2: Download the VAB Project
-
-1.  Go to the [VAB GitHub Repository page](https://github.com/your-username/your-repo-name).
-2.  Click the green **`< > Code`** button.
-3.  Click **"Download ZIP"**.
-4.  Unzip the downloaded file into a permanent location on your computer, for example `C:\Tools\VAB`.
-
-### Step 3: Set Up the "Workshop" (Virtual Environment)
-
-We need to create a clean, isolated space for all of VAB's tools and libraries. This is called a "virtual environment."
-
-1.  Open the Windows Command Prompt or PowerShell. You can do this by opening the Start Menu, typing `cmd` or `powershell`, and pressing Enter.
-2.  Navigate to your VAB project folder using the `cd` (change directory) command. For example:
-    ```cmd
-    cd C:\Tools\VAB
-    ```
-3.  Now, run this command to create the virtual environment. It will create a new `venv` folder inside your project directory.
-    ```cmd
-    python -m venv venv
-    ```
-4.  Next, you need to "activate" this environment. This tells your terminal to use this isolated workshop for all future commands.
-    ```cmd
-    venv\Scripts\activate
-    ```
-    You will know it worked because your terminal prompt will change to show `(venv)` at the beginning.
-
-5. Configure the applicaton for your local environment
-
-   ```cmd
-   copy .env.example .env
-   ```
-   You will want to edit the .env file with your favorite editor (like Notepad) and change the two items that are marked "TODO":
-
-
-
-### Step 4: Install the VAB Application
-
-Now that your workshop is ready, we can install the base application and its core dependencies.
-
-Run this command (make sure your venv is still active):
-```cmd
-pip install -e .
-```
-
-### Step 5: Install the AI Brains (Local LLM Dependencies)
-
-This is the final installation step. To enable the powerful local AI features, you need to install some larger libraries, including the PyTorch engine. We've created a guided installer to make this easy.
-
-Run the interactive installer script:
-```cmd
-python vab.py install
-```
-This script will ask you whether you have an NVIDIA GPU and help you install the correct, high-performance libraries for your system. For most users with modern NVIDIA cards (RTX 20-series or newer), the **CUDA 12.1** option is the best choice. If you don't have an NVIDIA card, choose the **CPU Only** option.
-
-This step will download a lot of data and may take some time.
-
-**Congratulations! VAB is now fully installed.**
+- **Semantic search** — find assets by meaning, not just keywords
+- **Hybrid filtering** — combine a vibe search with hard filters (category, artist, compatible figure)
+- **Web UI** — browse and search your library in a browser at `http://localhost:8000`
+- **Demo mode** — try the UI without any database setup
+- **CLI** — query, index, and inspect your library from the terminal
+- **DAZ Studio integration** — open products directly in the Content Library via the DAZ Script Server plugin
 
 ---
 
-## How to Use VAB: The Workflow
+## Installation
 
-Using VAB is a step-by-step process to build and search your index. Run all commands from your project folder in a terminal with the `(venv)` activated.
+Three distribution formats are available from the [Releases page](https://github.com/bluemoonfoundry/daz-content-browser/releases). Choose the one that fits your setup.
 
-### 1. Build Your Database
+### Option A — Release zip (recommended for most users)
 
-First, you need to tell VAB about all your content. Remember that DAZ Studio should be up and running before you start!
+The zip includes the pre-built UI and launcher scripts. You need Python 3.11+ installed, but nothing else.
 
-*   **Fetch DAZ Content:** Run the `fetch` command. The scripts talks to DAZ Studio about all the products you've installed.
-    ```cmd
-    python vab.py fetch
-    ```
-*   **Scrape Details:** Now, run `scrape` to gather the rich descriptions for your official DAZ products. This can take a long time if you have a large library, so please be patient. 
-    ```cmd
-    python vab.py scrape
-    ```
-### 2. Create the Search Index
+1. Download `vab-release.zip` from the latest release and unzip it to a permanent location (e.g. `C:\Tools\VAB`).
+2. Double-click **`run.bat`** (Windows) or run **`./run.sh`** (Mac/Linux).
 
-After your database is populated, you need to "load" it into the smart search index. This process generates the AI "embeddings" for each product.
+The launcher creates a virtual environment, installs all dependencies including CPU-only PyTorch, and starts the server. This only happens on the first run — subsequent launches start immediately.
 
-```cmd
-python vab.py rebuild
+> **GPU users:** After the first run, you can upgrade to a CUDA-accelerated build. See [Switching to GPU (CUDA)](#switching-to-gpu-cuda) below.
+
+### Option B — pip install (for Python-savvy users)
+
+```bash
+pip install "visual-asset-browser[local_llm]"
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+vab server
 ```
-This is a one-time process that can be slow, but it's what makes the semantic search possible.
 
-### 3. Search Your Content!
+The `vab` command is added to your PATH by pip. See [CLI reference](#cli-reference) for all commands.
 
-Now for the fun part. Use the `query` command to search your library.
+### Option C — Standalone executable (no Python required)
 
-*   **Simple "Vibe" Search:**
-    ```cmd
-    python vab.py query "gritty cyberpunk street clothes"
-    ```
+Download `vab-windows.zip` from the latest release. Unzip it and run `vab\vab.exe server` from a terminal. No Python installation needed.
 
-    Produces this output:
-    ```
-    Starting query command...
-    --- Loading embedding model: mixedbread-ai/mxbai-embed-large-v1 ---
-    --- Embedding model loaded. ---
-    +++ Using mixedbread-ai/mxbai-embed-large-v1 for embedding +++
-    ┏━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━┓
-    ┃ #    ┃ Name                                     ┃ Artist                     ┃ Category        ┃    Score ┃ SKU        ┃
-    ┡━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━┩
-    │ 1    │ Cyberpunk Street Props                   │ ["Polish"]                 │ Environments    │   0.3038 │ 81460      │
-    │ 2    │ Cyberpunk Back Alley                     │ ["Polish"]                 │ Props           │   0.3095 │ 81418      │
-    │ 3    │ dForce Night Runner Outfit for Genesis … │ ["Daz Originals", "GolaM"] │ People          │   0.3460 │ 54841      │
-    │ 4    │ dForce Urban Fall Style Outfit for Gene… │ ["PandyGirl",              │ N/A             │   0.3466 │ 92088      │
-    │      │                                          │ "WildDesigns"]             │                 │          │            │
-    │ 5    │ Cyberpunk Dark City                      │ ["Dreamlight", "Reedux     │ Environments    │   0.3476 │ 89352      │
-    │      │                                          │ Studio"]                   │                 │          │            │
-    └──────┴──────────────────────────────────────────┴────────────────────────────┴─────────────────┴──────────┴────────────┘
-    Showing 5 of 45 total matches.
-    ```    
-*   **Search with Filters:**
-    ```cmd
-    python vab.py query "elegant gown" --categories Clothing --compatible_figures "Genesis 9"
-    ```
-    Produces this output:
-    ```
-    Starting query command...
-    --- Loading embedding model: mixedbread-ai/mxbai-embed-large-v1 ---
-    --- Embedding model loaded. ---
-    +++ Using mixedbread-ai/mxbai-embed-large-v1 for embedding +++
-    ┏━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━┓
-    ┃ #    ┃ Name                                     ┃ Artist                     ┃ Category        ┃    Score ┃ SKU        ┃
-    ┡━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━┩
-    │ 1    │ dForce Aria Outfit for Genesis 9         │ ["Daz Originals", "Nelmi"] │ Clothes         │   0.2739 │ 90659      │
-    │ 2    │ dForce Aquarius Gown for Genesis 3 and … │ ["Sshodan"]                │ Female          │   0.2836 │ 69235      │
-    │ 3    │ dForce Gown of Fantasy 2 for Genesis 8 … │ ["outoftouch"]             │ Clothes         │   0.3241 │ 69465      │
-    │ 4    │ dForce Rochelle Gown for Genesis 8 Fema… │ ["Daz Originals",          │ People          │   0.3285 │ 56213      │
-    │      │                                          │ "PandyGirl"]               │                 │          │            │
-    │ 5    │ dForce Aurea Regina Outfit for Genesis … │ ["Daz Originals", "Arki"]  │ Clothes         │   0.3459 │ 83777      │
-    └──────┴──────────────────────────────────────────┴────────────────────────────┴─────────────────┴──────────┴────────────┘
-    Showing 5 of 45 total matches.
-    ```
+> **Note:** The standalone executable is large (~2–3 GB) because PyTorch is bundled inside it. The zip and pip options above are faster to download and recommended unless you specifically cannot install Python.
 
-### Other Useful Commands
+---
 
-*   **`stats`**: See a summary of your indexed content, including a list of the most common tags.
-    ```cmd
-    python vab.py stats
-    ```
-*   **`server`**: Run the API server for the upcoming web user interface.
-    ```cmd
-    python vab.py server
-    ```
+## Quick start: Demo mode
 
-We hope this tool helps you rediscover the amazing assets in your collection!
+Demo mode runs the server with mock data — no database or configuration required. It's the fastest way to see the UI.
 
+**From the release zip:**
+- Double-click `run-demo.bat` (Windows) or run `./run-demo.sh`
 
-### TODO:
-- Add support for third party content or content that has been manually installed.
-- Wrap in a GUI shell so we don't need to use a command line and we don't have to repeatedly load the embedding model. Makes things go faster!
+**From source or pip:**
+```bash
+vab server --demo
+# or
+python vab.py server --demo
+```
 
+Open `http://localhost:8000` in your browser.
 
+---
 
+## Production setup
 
+Production mode connects to your DAZ Studio CMS database (PostgreSQL) to index your real library.
 
+### 1. Configure your environment
 
+Copy `.env.example` to `.env` and edit it:
 
+```bash
+cp .env.example .env
+```
 
+The key values to set:
 
+| Variable | Description |
+|---|---|
+| `DAZ_STUDIO_EXE_PATH` | Full path to `DAZStudio.exe` |
+| `DB_HOST` / `DB_PORT` | DAZ CMS database host and port (defaults: `127.0.0.1` / `17237`) |
+| `DB_NAME` / `DB_USER` / `DB_PASS` | DAZ CMS database credentials |
+| `EMBEDDING_DEVICE` | `cpu` (default) or `cuda` for GPU acceleration |
+
+The database is the local PostgreSQL instance that DAZ Studio installs and manages. You do not need to set it up yourself — just make sure DAZ Studio has been run at least once.
+
+### 2. Build the index
+
+Run the `load` command to pull products from the DAZ CMS database, enrich them, and build the local search index:
+
+```bash
+python vab.py load
+```
+
+This may take a while on first run as it generates embeddings for each product. Subsequent runs are incremental — only new products are processed.
+
+Useful flags:
+```bash
+python vab.py load --force      # full rebuild, re-processes everything
+python vab.py load --limit 100  # process only 100 products (good for testing)
+python vab.py load --phase etl  # run only the ETL phase (skip embedding)
+```
+
+### 3. Start the server
+
+```bash
+python vab.py server
+```
+
+Open `http://localhost:8000`. The server also accepts `--host` and `--port`:
+
+```bash
+python vab.py server --host 0.0.0.0 --port 9000
+```
+
+---
+
+## CLI reference
+
+All commands are run via `python vab.py <command>` (or just `vab <command>` if installed via pip).
+
+```
+python vab.py            # show help
+python vab.py --help     # same
+python vab.py <command> --help  # per-command help
+```
+
+### `server` — run the web server
+
+```bash
+python vab.py server [--host HOST] [--port PORT] [--demo]
+```
+
+Starts the FastAPI server. The built UI is served at `/` if `ui/dist/` is present. Defaults to `127.0.0.1:8000`.
+
+### `load` — build the search index
+
+```bash
+python vab.py load [--force] [--all] [--limit N] [--phase {etl,embed,all}]
+```
+
+Pulls data from the DAZ CMS PostgreSQL database, enriches it, and stores it in the local SQLite + ChromaDB index.
+
+### `query` — search from the terminal
+
+```bash
+python vab.py query "gritty cyberpunk street clothes"
+python vab.py query "elegant gown" --categories Clothing --compatible_figures "Genesis 9"
+python vab.py query "fantasy scene" --limit 10 --format table
+```
+
+Options: `--tags`, `--limit`, `--score`, `--sort-by`, `--sort-order`, `--categories`, `--artists`, `--compatible_figures`, `--format {pretty,json,table}`
+
+### `stats` — index summary
+
+```bash
+python vab.py stats
+```
+
+Prints document counts and top-N histograms for categories, artists, and tags.
+
+### `openproduct` — open in DAZ Studio
+
+```bash
+python vab.py openproduct --product "dForce Night Runner Outfit"
+```
+
+Navigates the DAZ Studio Content Library to the named product.
+
+---
+
+## Switching to GPU (CUDA)
+
+By default, CPU-only PyTorch is installed. If you have an NVIDIA GPU, you can get significantly faster indexing by switching to a CUDA build.
+
+Find your CUDA version in the NVIDIA control panel, then run:
+
+```bash
+# Replace cu121 with your CUDA version (cu118, cu121, cu124, etc.)
+pip install torch --index-url https://download.pytorch.org/whl/cu121
+```
+
+Also set `EMBEDDING_DEVICE=cuda` in your `.env` file.
+
+---
+
+## Developer guide
+
+### Prerequisites
+
+- Python 3.11+
+- Node.js 18+ (for the UI)
+- Git with submodule support
+
+### Setup
+
+```bash
+git clone https://github.com/bluemoonfoundry/daz-content-browser.git
+cd daz-content-browser
+make install           # install Python deps + UI node modules
+make install-torch-cpu # install CPU PyTorch (or install CUDA version manually)
+make build             # build the UI into ui/dist/
+make dev-server        # start the server at :8000
+make dev-ui            # start the Vite dev server at :5173 with hot reload
+```
+
+### All Makefile targets
+
+```
+make help
+```
+
+| Target | Description |
+|---|---|
+| `install` | Install Python deps and UI node modules |
+| `install-torch-cpu` | Install CPU-only PyTorch |
+| `build` | Build the UI into `ui/dist/` |
+| `dev-server` | Run the FastAPI server at `:8000` |
+| `demo-server` | Run the server in demo mode |
+| `dev-ui` | Run the Vite dev server at `:5173` |
+| `test` | Run smoke tests |
+| `sync-ui` | Pull latest UI submodule commits |
+| `release-zip` | Build `dist/vab-release.zip` |
+| `release-wheel` | Build pip-installable wheel into `dist/` |
+| `release-exe` | Build standalone Windows executable via PyInstaller |
+| `gh-release` | Publish `dist/` artifacts to a GitHub release |
+| `clean` | Remove `ui/dist/`, `dist/`, `src/ui_dist/` |
+
+### Building release artifacts
+
+Run `make build` first (populates `ui/dist/`), then:
+
+```bash
+make release-zip    # → dist/vab-release.zip
+make release-wheel  # → dist/visual_asset_browser-*.whl
+make release-exe    # → dist/vab/vab.exe  (~2-3 GB)
+```
+
+To publish to GitHub Releases:
+
+```bash
+make gh-release VERSION=v1.0.0 TITLE="Initial Release" NOTES="First public release"
+
+# Update an existing release
+make gh-release VERSION=v1.0.0 UPDATE=1 NOTES="Fixed wheel packaging"
+```
+
+`TITLE` defaults to `VERSION` if omitted. All `*.zip` and `*.whl` files in `dist/` are uploaded. If the PyInstaller output directory (`dist/vab/`) is present it is zipped automatically before upload.

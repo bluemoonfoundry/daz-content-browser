@@ -6,9 +6,9 @@ build-backend = "setuptools.build_meta"
 name = "visual-asset-browser"
 version = "1.0.0"
 authors = [
-  { name="Your Name", email="you@example.com" },
+  { name="G.Hirpara", email="gshirpara@gmail.com" },
 ]
-description = "A semantic search and enrichment pipeline for a 3D asset library."
+description = "A semantic search and browser for DAZ Studio 3D asset libraries."
 readme = "README.md"
 requires-python = ">=3.11"
 classifiers = [
@@ -17,53 +17,50 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 
-# --- Core Dependencies ---
-# These are required for the server and base functionality to run.
 dependencies = [
-    "scrapy",
-    "scrapy-playwright",
     "fastapi",
     "uvicorn[standard]",
     "python-multipart",
     "pydantic",
     "chromadb",
-    "python-dotenv", # Correct package name
-    "rich",          # For table formatting in the CLI
+    "python-dotenv",
+    "rich",
     "huggingface-hub",
-    "numpy==2.3.0"   # Pinning numpy to resolve conflicts
+    "requests",
+    "psycopg2-binary",
+    "numpy==2.3.0",
 ]
 
-# --- Optional Dependencies for LLM Functionality ---
 [project.optional-dependencies]
 
-# Libraries for running local models (both embedding and generation)
 local_llm = [
+    "torch",                  # CPU build by default; see README for CUDA install
     "transformers",
     "accelerate",
     "bitsandbytes",
-    "sentence-transformers", # For embedding models
-    "outlines==0.0.36",      # For structured generation
-    "datasets",              # Often a dependency for transformers/tokenizers
-    "einops"                 # Often a dependency for transformers models
+    "sentence-transformers",
+    "datasets",
+    "einops",
 ]
 
-# Libraries for using the OpenAI API
 openai = [
     "openai",
 ]
 
-# A convenient group to install all possible LLM providers
 all_llms = [
     "visual-asset-browser[local_llm]",
     "visual-asset-browser[openai]",
 ]
 
-# Testing
-testing = [
-    "pytest",
-    "httpx",   # required by FastAPI TestClient
+build = [
+    "build",
+    "pyinstaller",
 ]
 
+testing = [
+    "pytest",
+    "httpx",
+]
 
 [project.scripts]
 vab = "main:main"
@@ -71,3 +68,6 @@ vab = "main:main"
 [tool.setuptools]
 package-dir = {"" = "src"}
 packages = { find = { where = ["src"] } }
+
+[tool.setuptools.package-data]
+"*" = ["ui_dist/**/*"]

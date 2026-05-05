@@ -31,7 +31,11 @@ logger = logging.getLogger(__name__)
 
 APP_MODE = os.getenv("APP_MODE", "production")
 _SETTINGS_PATH = Path(__file__).parent.parent / "settings.json"
-_DIST_PATH = Path(__file__).parent.parent / "ui" / "dist"
+_DIST_PATH = (
+    Path(__file__).parent / "ui_dist"                   # installed wheel / PyInstaller
+    if (Path(__file__).parent / "ui_dist").exists()
+    else Path(__file__).parent.parent / "ui" / "dist"   # development
+)
 
 # ── Global update task (single active task; UI polls this) ────────────────────
 _current_task: dict = {

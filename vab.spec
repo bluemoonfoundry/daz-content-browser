@@ -1,0 +1,75 @@
+# -*- mode: python ; coding: utf-8 -*-
+# PyInstaller spec for Visual Asset Browser
+#
+# Build:  make release-exe   (or: pyinstaller vab.spec --distpath dist)
+# Prereq: make build         (populates ui/dist/ first)
+#
+# Output: dist/vab/vab.exe  (~2-3 GB due to PyTorch — distribute as a zip)
+# The output directory contains everything; do not move vab.exe out of it.
+
+from PyInstaller.utils.hooks import collect_all, collect_data_files
+
+datas = [
+    ('ui/dist', 'ui_dist'),  # pre-built UI; served by FastAPI at runtime
+    ('src', '.'),            # Python source modules on sys.path via pathex
+]
+binaries = []
+hiddenimports = [
+    # uvicorn uses string-based dynamic imports for its protocol/loop backends
+    'uvicorn.logging',
+    'uvicorn.loops.auto',
+    'uvicorn.loops.asyncio',
+    'uvicorn.protocols.http.auto',
+    'uvicorn.protocols.http.h11_impl',
+    'uvicorn.protocols.websockets.auto',
+    'uvicorn.lifespan.on',
+    'uvicorn.lifespan.off',
+    # pydantic v1 shim used internally by several packages
+    'pydantic.v1',
+]
+
+for pkg in ('chromadb', 'sentence_transformers', 'transformers'):
+    d, b, h = collect_all(pkg)
+    datas += d
+    binaries += b
+    hiddenimports += h
+
+datas += collect_data_files('huggingface_hub')
+
+a = Analysis(
+    ['vab.py'],
+    pathex=['src'],
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=hiddenimports,
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    noarchive=False,
+)
+
+pyz = PYZ(a.pure)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    [],
+    exclude_binaries=True,
+    name='vab',
+    debug=False,
+    strip=False,
+    upx=True,
+    console=True,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='vab',
+)

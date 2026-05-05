@@ -1,45 +1,8 @@
-dotenv
-scrapy
-scrapy-playwright
-chromadb
-python-dotenv
-transformers
-accelerate
-fastapi
-uvicorn[standard]
-python-multipart
-outlines
-pydantic
-numpy==2.3.0
-bitsandbytes
-datasets
-einops
-sentence_transformers
-rich
-browse
-bs4
-readability-lxml
-
-# Add torch seperately based on availability of CUDA?
-
-# For the CPU only build
-# torch
-
-# For a specific CUDA version
-# Run this command after installing the other requirements, replacing cu126 with 
-# the desired CUDA version, e.g., cu117, cu118, cu121, etc.
+# pyproject.toml is the canonical dependency list.
 #
-# pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+# Quick dev install:
+#   pip install -e ".[local_llm]"
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
 #
-
-# For llama-cpp-python with GPU support (CUDA) if you want to rebuild
-#
-# CMAKE_ARGS="-DLLAMA_CUBLAS=on" FORCE_CMAKE=1 pip install llama-cpp-python
-#
-# pip install llama-cpp-python==0.2.64 --prefer-binary --extra-index-url=https://abetlen.github.io/llama-cpp-python/whl/cu126
-#
-# Make sure we install playwright
-#
-# playwright install
-
-
+# For CUDA (replace cu121 with your CUDA version):
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
