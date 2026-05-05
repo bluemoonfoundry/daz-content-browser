@@ -10,6 +10,7 @@ NOTES   ?=
 UPDATE  ?=
 
 .PHONY: install install-torch-cpu build dev-server demo-server dev-ui \
+        open-server open-demo-server \
         release-zip release-wheel release-exe gh-release test clean sync-ui help
 
 help:                ## Show available targets
@@ -36,6 +37,14 @@ dev-server:          ## Run the FastAPI server (serves last built UI at :8000)
 	$(PYTHON) vab.py server
 
 demo-server:         ## Run the FastAPI server in demo mode (no DB required)
+	$(PYTHON) vab.py server --demo
+
+open-server:         ## Run the server and open the UI in a browser
+	(sleep 3 && (open http://localhost:8000 2>/dev/null || xdg-open http://localhost:8000 2>/dev/null || start http://localhost:8000)) &
+	$(PYTHON) vab.py server
+
+open-demo-server:    ## Run the demo server and open the UI in a browser
+	(sleep 3 && (open http://localhost:8000 2>/dev/null || xdg-open http://localhost:8000 2>/dev/null || start http://localhost:8000)) &
 	$(PYTHON) vab.py server --demo
 
 dev-ui:              ## Run the Vite dev server with hot reload at :5173 (proxies /api to :8000)
