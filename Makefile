@@ -2,7 +2,7 @@ PYTHON  := python
 UI_SRC  := ui/src
 UI_DIST := ui/dist
 
-.PHONY: install build dev-server dev-ui test clean sync-ui help
+.PHONY: install build dev-server demo-server dev-ui test clean sync-ui help
 
 help:                ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*##"}; {printf "  %-14s %s\n", $$1, $$2}'
@@ -22,7 +22,10 @@ build:               ## Build the UI into ui/dist/ (required before running serv
 # ── Development ────────────────────────────────────────────────────────────────
 
 dev-server:          ## Run the FastAPI server (serves last built UI at :8000)
-	$(PYTHON) src/server.py
+	$(PYTHON) vab.py server
+
+demo-server:         ## Run the FastAPI server in demo mode (no DB required)
+	$(PYTHON) vab.py server --demo
 
 dev-ui:              ## Run the Vite dev server with hot reload at :5173 (proxies /api to :8000)
 	cd $(UI_SRC) && npm run dev

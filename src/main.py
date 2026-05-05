@@ -2,6 +2,7 @@ import argparse
 import json
 import logging
 import os
+import sys
 
 from rich.progress import (
     BarColumn,
@@ -206,6 +207,10 @@ def main():
     }
     for cmd, sub_parser in parsers.items():
         sub_parser.set_defaults(func=func_map[cmd])
+
+    if len(sys.argv) == 1 or (len(sys.argv) == 2 and sys.argv[1] == "help"):
+        parser.print_help()
+        sys.exit(0)
 
     args = parser.parse_args()
     args.func(args)

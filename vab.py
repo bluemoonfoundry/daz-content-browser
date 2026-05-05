@@ -4,40 +4,34 @@
 import sys
 import os
 
+_HELP = """\
+usage: vab.py <command> [options]
+
+commands:
+  server       Run the FastAPI web server
+  query        Query the ChromaDB vector store
+  load         Load data from DAZ Postgres to SQLite and ChromaDB
+  stats        Display stats about the ChromaDB collection
+  openproduct  Open a named DAZ product in DAZ Studio
+
+Run 'vab.py <command> --help' for per-command options.
+"""
+
 def main_launcher():
-    """
-    This is the main entry point for the Visual Asset Browser CLI.
+    """Entry point for the Visual Asset Browser CLI.
 
-    Its primary job is to correctly configure the Python path to include the 'src'
-    directory, ensuring that all modules can be imported reliably. It also
-    handles the special 'install' command before loading the main application.
+    Adds src/ to sys.path so all modules are importable, then delegates to
+    src/main.py. Use 'make install' (or 'pip install -e .') to install deps.
     """
-    # --- 1. Path Configuration ---
-    # Get the absolute path of the directory containing THIS script (the project root).
+    if len(sys.argv) == 1 or (len(sys.argv) == 2 and sys.argv[1] in ("help", "--help", "-h")):
+        print(_HELP)
+        sys.exit(0)
+
     project_root = os.path.dirname(os.path.abspath(__file__))
-
-    # Construct the absolute path to the 'src' directory.
     src_path = os.path.join(project_root, 'src')
-
-    # Add the 'src' directory to the beginning of the Python path.
-    # This is the crucial step that makes imports like 'from query_utils...' work.
     if src_path not in sys.path:
         sys.path.insert(0, src_path)
 
-    # --- 2. Handle the Special 'install' Command ---
-    # We check for the 'install' command *before* importing the main app.
-    # This allows the installer to run even if dependencies like 'torch' or
-    # 'transformers' are not yet installed, preventing an ImportError.
-    if len(sys.argv) > 1 and sys.argv[1] == "install":
-        # Import the installer function only when needed.
-        from installer import install_dependencies
-        install_dependencies()
-        # Exit cleanly after the installation is complete.
-        sys.exit(0)
-
-    # --- 3. Run the Main Application ---
-    # If the command was not 'install', we can now safely import and run
-    # the main CLI logic from src/main.py.
     from main import main
     main()
 
