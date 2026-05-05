@@ -102,9 +102,15 @@ def get_demo_search_results(prompt, limit=10, offset=0, **kwargs):
 
 
 def get_demo_status():
+    n = len(DUMMY_PRODUCTS)
     return {
-        "indexed": len(DUMMY_PRODUCTS),
-        "total_in_library": len(DUMMY_PRODUCTS),
+        "status": "ok",
+        "postgres_connected": False,
+        "sqlite_connected": True,
+        "chromadb_connected": True,
+        "postgres_count": 0,
+        "sqlite_count": n,
+        "chromadb_count": n,
         "new_products": 0,
         "update_available": False,
     }
