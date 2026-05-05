@@ -1,8 +1,9 @@
-# Visual Asset Browser (VAB)
+# DAZ Visual Asset Browser (VAB)
 
-Visual Asset Browser is a semantic search engine and browser for your DAZ Studio content library. Instead of hunting by product name, you describe what you want — "gritty cyberpunk outfit" or "soft fantasy lighting" — and VAB finds relevant assets from your own collection.
+Visual Asset Browser is a semantic search engine and browser for your DAZ Studio content library. Instead of hunting by product name, you describe what you want — "asian city streets" or "soft fantasy lighting" — and VAB finds relevant assets from your own collection.
 
-<img width="1482" height="768" alt="screenshot_med" src="https://github.com/user-attachments/assets/eb7fbd1c-8b56-404f-bb5d-ea682a6f9fb4" />
+<img width="2387" height="1298" alt="Screenshot 2026-05-05 080942" src="https://github.com/user-attachments/assets/4caf9aae-5957-4a2a-9818-182e085d0dc6" />
+
 
 ## Features
 
