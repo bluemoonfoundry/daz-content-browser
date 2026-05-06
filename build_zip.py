@@ -17,11 +17,18 @@ STAGING = DIST / "vab-release"
 
 INCLUDE_FILES = [
     "vab.py",
+    "install.py",
+    "dev.py",
     "pyproject.toml",
+    ".env.example",
     "run.bat",
     "run.sh",
     "run-demo.bat",
     "run-demo.sh",
+    "run-ui.bat",
+    "run-ui.sh",
+    "run-demo-ui.bat",
+    "run-demo-ui.sh",
 ]
 
 
