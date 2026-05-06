@@ -1,3 +1,6 @@
 #!/usr/bin/env bash
-[ -f .venv/bin/activate ] && source .venv/bin/activate
-python dev.py --demo "$@"
+if [ -f ".venv/Scripts/python" ]; then
+    ".venv/Scripts/python" dev.py --demo "$@"
+else
+    ".venv/bin/python" dev.py --demo "$@"
+fi

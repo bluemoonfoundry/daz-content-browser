@@ -1,4 +1,3 @@
 @echo off
-if exist .venv\Scripts\activate.bat call .venv\Scripts\activate.bat
-python dev.py --demo %*
+.venv\Scripts\python.exe dev.py --demo %*
 pause

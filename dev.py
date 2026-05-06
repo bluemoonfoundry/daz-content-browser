@@ -5,6 +5,7 @@ Usage:
     python dev.py           # production API + Vite, opens browser at :5173
     python dev.py --demo    # demo API + Vite
 
+The API server is given 15 seconds to start before Vite is launched.
 If either process exits unexpectedly the other is stopped automatically.
 Ctrl+C stops both cleanly.
 """
@@ -18,9 +19,25 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent
 UI_SRC = ROOT / "ui" / "src"
+VENV = ROOT / ".venv"
 
-# On Windows npm is a .cmd batch file; it needs shell=True or the .cmd extension
+SERVER_STARTUP_WAIT = 15   # seconds to wait for the API server before starting Vite
+BROWSER_OPEN_DELAY  = 8    # additional seconds after Vite starts before opening browser
+
+# npm is a .cmd batch file on Windows
 NPM = "npm.cmd" if sys.platform == "win32" else "npm"
+
+
+def find_venv_python():
+    """Return the venv Python executable, falling back to sys.executable."""
+    for candidate in [
+        VENV / "Scripts" / "python.exe",
+        VENV / "Scripts" / "python",
+        VENV / "bin" / "python",
+    ]:
+        if candidate.exists():
+            return str(candidate)
+    return sys.executable
 
 
 def main():
@@ -28,25 +45,37 @@ def main():
     parser.add_argument("--demo", action="store_true", help="Run API in demo mode")
     parser.add_argument("--host", default="127.0.0.1", help="API server host")
     parser.add_argument("--port", type=int, default=8000, help="API server port")
-    parser.add_argument("--ui-port", type=int, default=5173, help="Vite port (informational)")
+    parser.add_argument("--ui-port", type=int, default=5173, help="Vite dev server port")
     args = parser.parse_args()
 
-    server_cmd = [sys.executable, "vab.py", "server", "--host", args.host, "--port", str(args.port)]
+    venv_python = find_venv_python()
+
+    server_cmd = [venv_python, "vab.py", "server", "--host", args.host, "--port", str(args.port)]
     if args.demo:
         server_cmd.append("--demo")
 
-    print("=" * 50)
+    print("=" * 52)
     print(f"  API server  ->  http://localhost:{args.port}")
     print(f"  UI (Vite)   ->  http://localhost:{args.ui_port}")
-    print("=" * 50)
+    print("=" * 52)
+    print(f"\nStarting API server (waiting {SERVER_STARTUP_WAIT}s before launching Vite)...")
     print("Press Ctrl+C to stop both.\n")
 
     server = subprocess.Popen(server_cmd, cwd=ROOT)
+
+    # Wait for the server to start, but bail early if it exits
+    for _ in range(SERVER_STARTUP_WAIT * 2):   # poll every 0.5s
+        time.sleep(0.5)
+        if server.poll() is not None:
+            print(f"\nERROR: API server exited (code {server.returncode}) during startup.")
+            print("Check the output above — likely a missing .env, bad DB credentials, or import error.")
+            sys.exit(server.returncode)
+
+    print("API server ready. Starting Vite...\n")
     vite = subprocess.Popen([NPM, "run", "dev"], cwd=UI_SRC)
 
-    # Open browser after a short delay so Vite has time to compile
     def _open_browser():
-        time.sleep(5)
+        time.sleep(BROWSER_OPEN_DELAY)
         if server.poll() is None and vite.poll() is None:
             webbrowser.open(f"http://localhost:{args.ui_port}")
 
@@ -55,20 +84,16 @@ def main():
     try:
         while True:
             time.sleep(0.5)
-            server_rc = server.poll()
-            vite_rc = vite.poll()
-
-            if server_rc is not None:
-                print(f"\nAPI server stopped (exit code {server_rc}). Stopping Vite...")
+            if server.poll() is not None:
+                print(f"\nAPI server stopped (exit code {server.returncode}). Stopping Vite...")
                 vite.terminate()
                 vite.wait()
-                sys.exit(server_rc)
-
-            if vite_rc is not None:
-                print(f"\nVite stopped (exit code {vite_rc}). Stopping API server...")
+                sys.exit(server.returncode)
+            if vite.poll() is not None:
+                print(f"\nVite stopped (exit code {vite.returncode}). Stopping API server...")
                 server.terminate()
                 server.wait()
-                sys.exit(vite_rc)
+                sys.exit(vite.returncode)
 
     except KeyboardInterrupt:
         print("\nStopping...")
