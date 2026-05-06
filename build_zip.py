@@ -23,12 +23,6 @@ INCLUDE_FILES = [
     ".env.example",
     "run.bat",
     "run.sh",
-    "run-demo.bat",
-    "run-demo.sh",
-    "run-ui.bat",
-    "run-ui.sh",
-    "run-demo-ui.bat",
-    "run-demo-ui.sh",
 ]
 
 

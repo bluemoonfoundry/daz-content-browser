@@ -40,10 +40,23 @@ Requires Python 3.11+ installed. No other setup.
    ```
 3. The installer will ask whether you want CPU-only or CUDA PyTorch. Choose CPU if you are unsure — you can switch later by re-running `install.py`. For CUDA version guidance consult [pytorch.org/get-started/locally](https://pytorch.org/get-started/locally/).
 4. Once installation finishes, start the server:
-   ```
+   ```bash
    run.bat          # Windows
-   ./run.sh         # Mac / Git Bash
+   ./run.sh         # Mac / Linux
    ```
+
+   The run scripts support optional flags:
+   - `--demo` - Run in demo mode (mock data, no database required)
+   - `--dev-ui` - Run with Vite dev server for UI development (requires `ui/src/`)
+
+   | Command | API Server | UI | Access URL |
+   |---------|-----------|-----|------------|
+   | `./run.sh` | Production | Pre-built | `http://localhost:8000` |
+   | `./run.sh --demo` | Demo mode | Pre-built | `http://localhost:8000` |
+   | `./run.sh --dev-ui` | Production | Vite (hot-reload) | `http://localhost:5173` |
+   | `./run.sh --demo --dev-ui` | Demo mode | Vite (hot-reload) | `http://localhost:5173` |
+
+   Interactive API docs are always available at `http://localhost:8000/docs`
 
 > **To switch between CPU and GPU later**, just re-run `python install.py` — it will ask again and reinstall the correct torch build.
 
@@ -65,21 +78,29 @@ Download `vab-windows.zip`, unzip it, and run `vab\vab.exe server`. No Python in
 
 ---
 
+> [!IMPORTANT]
+> **After installation, you need to index your content before the UI will display anything.**
+> The server will run, but your library will be empty until you build the index. See [Production setup](#production-setup) below for configuration and indexing instructions. To try the UI immediately with mock data, use [Demo mode](#quick-start-demo-mode) instead.
+
+---
+
 ## Quick start: Demo mode
 
 Demo mode runs the server with built-in mock data. No database or configuration required — useful for trying the UI or developing against the API.
 
 ```bash
 # From release zip
-run-demo.bat          # Windows
-./run-demo.sh         # Mac/Linux
+run.bat --demo        # Windows
+./run.sh --demo       # Mac/Linux
 
 # From source or pip
 python vab.py server --demo
 vab server --demo
 ```
 
-Server starts at `http://localhost:8000`. Interactive API docs are at `http://localhost:8000/docs`.
+Once started:
+- **Web UI**: `http://localhost:8000`
+- **API docs**: `http://localhost:8000/docs`
 
 ---
 
@@ -525,9 +546,18 @@ cd daz-content-browser
 make install            # Python deps + UI node modules
 make install-torch-cpu  # CPU PyTorch (or install CUDA version manually)
 make build              # build UI into ui/dist/
-make dev-server         # API server at :8000
-make dev-ui             # Vite dev server at :5173 with hot reload (proxies /api to :8000)
 ```
+
+For development, you can run:
+
+| Command | Mode | UI | Access URL |
+|---------|------|-----|------------|
+| `./run.sh` | Production | Pre-built from `ui/dist/` | `http://localhost:8000` |
+| `./run.sh --demo` | Demo | Pre-built from `ui/dist/` | `http://localhost:8000` |
+| `./run.sh --dev-ui` | Production | Vite with hot-reload | `http://localhost:5173` |
+| `./run.sh --demo --dev-ui` | Demo | Vite with hot-reload | `http://localhost:5173` |
+
+> Note: The `--dev-ui` flag requires the `ui/src/` submodule to be present. Without it, use the pre-built UI at `:8000`.
 
 ### Makefile targets
 
