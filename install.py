@@ -85,12 +85,28 @@ def main():
         sys.exit(1)
 
     # ── Step 2: choose PyTorch build ──────────────────────
-    device = ask(
-        "Select PyTorch build:\n  (check NVIDIA Control Panel → Help → System Information for your CUDA version)",
+    options = (
         [("CPU only  — works on all machines, slower embedding", "cpu")]
         + [(f"CUDA {ver[0].split()[1]}  — NVIDIA GPU, faster embedding  ({ver[1]})", ver[1])
-           for ver in CUDA_VERSIONS],
+           for ver in CUDA_VERSIONS]
+        + [("Other CUDA version  — consult https://pytorch.org/get-started/locally/ for your version", "custom")]
     )
+    device = ask(
+        "Select PyTorch build:\n  (check NVIDIA Control Panel → Help → System Information for your CUDA version)",
+        options,
+    )
+
+    if device == "custom":
+        print()
+        print("  Visit https://pytorch.org/get-started/locally/ to find the correct")
+        print("  version string for your system (e.g. 118, 121, 124, 126, 130 ...).")
+        print()
+        while True:
+            value = input("  Enter your CUDA version number: ").strip()
+            if value.isdigit():
+                device = f"cu{value}"
+                break
+            print("  Please enter a numeric value only (e.g. 121, 130).")
 
     # ── Step 3: install torch ─────────────────────────────
     print("\nInstalling PyTorch...")
