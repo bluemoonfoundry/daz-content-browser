@@ -34,11 +34,18 @@ Three distribution formats are available from the [Releases page](https://github
 Requires Python 3.11+ installed. No other setup.
 
 1. Download `vab-release.zip` and unzip to a permanent location (e.g. `C:\Tools\VAB`).
-2. Double-click **`run.bat`** (Windows) or run **`./run.sh`** (Mac/Linux).
+2. Open a terminal in that folder and run the installer:
+   ```bash
+   python install.py
+   ```
+3. The installer will ask whether you want CPU-only or CUDA PyTorch. Choose CPU if you are unsure — you can switch later by re-running `install.py`. For CUDA version guidance consult [pytorch.org/get-started/locally](https://pytorch.org/get-started/locally/).
+4. Once installation finishes, start the server:
+   ```
+   run.bat          # Windows
+   ./run.sh         # Mac / Git Bash
+   ```
 
-The launcher creates a virtual environment, installs all dependencies including CPU-only PyTorch, and starts the server. First run takes a few minutes; subsequent runs start immediately.
-
-> **GPU users:** After the first run, upgrade to CUDA for faster indexing. See [Switching to GPU](#switching-to-gpu-cuda).
+> **To switch between CPU and GPU later**, just re-run `python install.py` — it will ask again and reinstall the correct torch build.
 
 ### Option B — pip install
 
@@ -48,7 +55,7 @@ pip install torch --index-url https://download.pytorch.org/whl/cpu
 vab server
 ```
 
-The `vab` command is added to your PATH by pip.
+The `vab` command is added to your PATH by pip. Replace the torch index URL with your CUDA version if needed (see [pytorch.org/get-started/locally](https://pytorch.org/get-started/locally/)).
 
 ### Option C — Standalone executable (no Python required)
 
