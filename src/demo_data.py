@@ -124,18 +124,21 @@ def get_demo_product(sku: str):
     return {
         "sku": match["id"],
         "name": m.get("name"),
-        "artist": m.get("artist"),
+        "artist": [m.get("artist")] if m.get("artist") else [],
         "category": m.get("category"),
         "subcategories": [],
         "compatible_figures": [f.strip() for f in m.get("compatible_figures", "").split(",") if f.strip()],
         "tags": [t.strip() for t in m.get("tags", "").split(",") if t.strip()],
-        "url": m.get("url"),
+        "store_url": m.get("url", ""),
         "image_url": None,
         "price": None,
         "description": None,
         "formats": None,
         "mature": False,
         "last_updated": m.get("last_updated"),
+        "install_date": m.get("last_updated"),
+        "is_installed": True,
+        "asset_count": 0,
     }
 
 

@@ -290,7 +290,36 @@ def list_products(
 ):
     """Paginated product listing with optional filters and sort."""
     if APP_MODE == "demo":
-        return {"products": [], "total": 0, "page": page, "page_size": page_size, "total_pages": 1}
+        from demo_data import DUMMY_PRODUCTS
+        all_products = DUMMY_PRODUCTS
+        if category:
+            all_products = [p for p in all_products if p["metadata"].get("category") == category]
+        if artist:
+            all_products = [p for p in all_products if p["metadata"].get("artist") == artist]
+        if compatible_figure:
+            all_products = [p for p in all_products if compatible_figure in p["metadata"].get("compatible_figures", "")]
+        total = len(all_products)
+        start = (page - 1) * page_size
+        page_products = all_products[start: start + page_size]
+        products = [
+            {
+                "sku": p["id"],
+                "name": p["metadata"].get("name"),
+                "artist": [p["metadata"].get("artist")] if p["metadata"].get("artist") else [],
+                "category": p["metadata"].get("category"),
+                "subcategories": [],
+                "compatible_figures": [f.strip() for f in p["metadata"].get("compatible_figures", "").split(",") if f.strip()],
+                "tags": [t.strip() for t in p["metadata"].get("tags", "").split(",") if t.strip()],
+                "store_url": p["metadata"].get("url", ""),
+                "image_url": None,
+                "is_installed": True,
+                "install_date": p["metadata"].get("last_updated"),
+                "asset_count": 0,
+            }
+            for p in page_products
+        ]
+        import math
+        return {"products": products, "total": total, "page": page, "page_size": page_size, "total_pages": max(1, math.ceil(total / page_size))}
 
     result = sqlite_db.get_products(
         page=page,
@@ -368,7 +397,27 @@ def run_search(request: UISearchRequest):
     """UI/vector semantic search. Accepts { query, filters, limit, min_relevance }."""
     logger.info(f"Search: query={request.query!r} filters={request.filters}")
     if APP_MODE == "demo":
-        return search_mock(prompt=request.query, limit=request.limit)
+        raw = search_mock(prompt=request.query, limit=request.limit)
+        results = [
+            {
+                "sku": r["id"],
+                "name": r["metadata"].get("name"),
+                "artist": [r["metadata"].get("artist")] if r["metadata"].get("artist") else [],
+                "category": r["metadata"].get("category"),
+                "subcategories": [],
+                "compatible_figures": [f.strip() for f in r["metadata"].get("compatible_figures", "").split(",") if f.strip()],
+                "tags": [t.strip() for t in r["metadata"].get("tags", "").split(",") if t.strip()],
+                "store_url": r["metadata"].get("url", ""),
+                "image_url": None,
+                "is_installed": True,
+                "install_date": r["metadata"].get("last_updated"),
+                "last_updated": r["metadata"].get("last_updated"),
+                "relevance_score": r.get("relevance_score"),
+                "asset_count": 0,
+            }
+            for r in raw.get("results", [])
+        ]
+        return {"results": results, "total": len(results), "query": request.query, "took_ms": 0}
 
     f = request.filters or SearchFilters()
     raw = chroma_db_manager.search(
