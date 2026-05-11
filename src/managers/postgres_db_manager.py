@@ -8,8 +8,11 @@ from pathlib import Path
 from utilities import fetch_json_from_url, fetch_html_content
 from managers.managers import chroma_db_manager, sqlite_db, daz_pg_analyzer
 from embedding_utils import generate_embeddings
-import re
-from collections import Counter
+from managers.etl_transforms import (
+    determine_categories as _determine_categories,
+    determine_compatibility as _determine_compatibility,
+    generate_embedding_text as _generate_embedding_text,
+)
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -18,28 +21,8 @@ logger = logging.getLogger(__name__)
 
 
 def determine_categories(content_type_string: str) -> dict:
-    """Analyzes a content type string to determine a primary category and subcategories.
-    
-    Args:
-        content_type_string (str): The raw content type string from the database.
-
-    Returns:
-        dict: A dictionary with 'category' and 'subcategories' keys.
-    """
-    IGNORE_WORDS = {'follower', 'default', 'support', 'preset', 'people', 'genesis', 'genesis 9', 'genesis 8', 'genesis 3'}
-    PRIORITY_WORDS = {'character', 'clothes', 'accessories', 'environments', 'hair', 'poses', 'animations', 'props', 'tools', 'effects'}
-    if not content_type_string: return {'category': None, 'subcategories': []}
-    words = re.split(r'[^a-zA-Z0-9]+', content_type_string)
-    valid_words = [w.lower().strip() for w in words if w.lower().strip() and w.lower().strip() not in IGNORE_WORDS]
-    if not valid_words: return {'category': None, 'subcategories': []}
-    primary_category = next((word for word in valid_words if word in PRIORITY_WORDS), None)
-    if primary_category is None:
-        word_counts = Counter(valid_words)
-        if word_counts: primary_category = word_counts.most_common(1)[0][0]
-    if primary_category is None: return {'category': None, 'subcategories': []}
-    unique_words = set(valid_words)
-    unique_words.discard(primary_category)
-    return {'category': primary_category, 'subcategories': sorted(list(unique_words))}
+    """Backward-compatible wrapper around pure ETL transform helper."""
+    return _determine_categories(content_type_string)
 
 def scrape_product_page(sku):
     """Given a SKU, fetch additional product details by scraping the product page.
@@ -80,55 +63,8 @@ def scrape_product_page(sku):
     return rv
 
 def generate_embedding_text(product_data, web_data) -> str:
-    """Generates a rich, descriptive paragraph for the embedding model. Focuses on combining factual data with potential use-cases and avoids noisy data.
-
-    Args:
-        product_data (dict): The raw product data from the database.
-        web_data (dict): The scraped web data including description and tags.
-
-    Returns:
-        str: A high-quality descriptive text for embedding generation.
-    """
-    logger.debug(f"Generating embedding text for: {product_data.get('product_name')}")
-    
-    # Extract clean data, providing sensible defaults
-    name = product_data.get('product_name', 'a 3D asset')
-    artist = product_data.get('artists')
-    categories = product_data.get('categories')
-    web_desc = web_data.get('description', '').strip()
-
-    # --- Build the descriptive text part by part ---
-    
-    # Start with a clear, factual statement.
-    parts = [f"A 3D asset package titled '{name}'."]
-    if artist:
-        parts.append(f"Created by the artist or studio: {artist}.")
-
-    # Use the categories to add rich, contextual information about the product's use-case.
-    if categories:
-        # Clean up the category string for better sentence flow
-        clean_categories = categories.replace(',', ', ')
-        parts.append(f"It is categorized under: {clean_categories}.")
-        
-        # Add inferred use-case sentences based on keywords in categories. This is very powerful.
-        cat_lower = categories.lower()
-        if 'props' in cat_lower or 'decor' in cat_lower:
-            parts.append("This is a set of props suitable for decorating digital scenes, environments, and dioramas.")
-        if 'furniture' in cat_lower:
-            parts.append("It includes furniture items for interior design and architectural visualization.")
-        if 'character' in cat_lower:
-            parts.append("This is a character asset for digital art and animation.")
-        if 'hair' in cat_lower:
-            parts.append("This is a hairstyle asset for 3D characters.")
-        if 'wardrobe' in cat_lower or 'clothes' in cat_lower:
-            parts.append("It contains clothing or wardrobe items for 3D figures.")
-            
-    # Add the high-quality human-written description from the web at the end.
-    if web_desc:
-        parts.append(f"Product Description: {web_desc}")
-
-    # Join all the parts into a single, cohesive paragraph.
-    return " ".join(parts)
+    """Backward-compatible wrapper around pure ETL transform helper."""
+    return _generate_embedding_text(product_data, web_data)
 
 def generate_and_store_embeddings(processed_skus, on_progress=None):
     """Fetches processed data from SQLite, generates embeddings, and stores them in ChromaDB in safe-sized batches to avoid database parameter limits.
@@ -214,56 +150,8 @@ def generate_and_store_embeddings(processed_skus, on_progress=None):
 
 
 def determine_compatibility(product_data: dict, figure_names: list) -> dict:
-    """ Determines compatible figures by checking multiple fields in order of priority:
-    1. The formal 'product_compatibility' string.
-    2. The product 'name'.
-    3. The product 'description' from web scraping (if available).
-    
-    Args:
-        product_data: A dictionary containing the product's raw data.
-        figure_names: A list of canonical figure names to search for.
-
-    Returns:
-        A dictionary with the clean compatibility string and the original
-        compatibility string to be appended to tags.
-    """
-    compat_str = product_data.get('product_compatibility')
-    name = product_data.get('product_name')
-    description = product_data.get('description', '') # Description comes from web_data
-
-    # Use a set to automatically handle duplicates
-    found_figures = set()
-
-    # --- Heuristic 1: Check the formal compatibility string first ---
-    if compat_str:
-        compat_lower = compat_str.lower()
-        for figure in figure_names:
-            if figure.lower() in compat_lower:
-                found_figures.add(figure)
-
-    # --- Heuristic 2: If nothing found, check the product name ---
-    if not found_figures and name:
-        name_lower = name.lower()
-        for figure in figure_names:
-            # We check for the figure name as a whole word or part of a compound
-            # to avoid false positives (e.g., 'Dragon' matching 'Genesis 8 Dragon Form')
-            if figure.lower() in name_lower:
-                found_figures.add(figure)
-    
-    # --- Heuristic 3: If still nothing, check the product description ---
-    if not found_figures and description:
-        desc_lower = description.lower()
-        for figure in figure_names:
-            if figure.lower() in desc_lower:
-                found_figures.add(figure)
-
-    # --- Finalize and Return ---
-    new_compatibility = ', '.join(sorted(list(found_figures)))
-    
-    return {
-        'new_compatibility': new_compatibility,
-        'tags_to_append': compat_str or '' # Always use the original string for tags
-    }
+    """Backward-compatible wrapper around pure ETL transform helper."""
+    return _determine_compatibility(product_data, figure_names)
 
 def main(args, on_progress=None):
     """Main ETL and Embedding pipeline with command-line arguments.
@@ -425,4 +313,3 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     main(args)
-
