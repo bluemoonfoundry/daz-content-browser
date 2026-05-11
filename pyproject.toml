@@ -60,8 +60,15 @@ build = [
 ]
 
 testing = [
-    "pytest",
-    "httpx",
+    "pytest>=8.2,<9.0",
+    "pytest-cov>=5.0,<6.0",
+    "httpx>=0.27,<1.0",
+]
+
+dev = [
+    "ruff>=0.6,<1.0",
+    "mypy>=1.10,<2.0",
+    "types-requests>=2.32.0.20240914,<3.0",
 ]
 
 [project.scripts]
@@ -73,3 +80,31 @@ packages = { find = { where = ["src"] } }
 
 [tool.setuptools.package-data]
 "*" = ["ui_dist/**/*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = ["ui/src", "ui/dist", "dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501", "B008"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_configs = true
+check_untyped_defs = true
+files = ["src/api", "src/services", "src/server.py"]
+
+[tool.pytest.ini_options]
+addopts = "--ignore=tests/test_api.py"
+
+[tool.coverage.run]
+source = ["src/api", "src/services", "src/server.py"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 50
+show_missing = true
+skip_empty = true

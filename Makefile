@@ -11,7 +11,7 @@ UPDATE  ?=
 
 .PHONY: install install-torch-cpu build dev-server demo-server dev-ui \
         open-server open-demo-server \
-        release-zip release-wheel release-exe gh-release test clean sync-ui help
+        release-zip release-wheel release-exe gh-release test test-cov lint typecheck quality clean sync-ui help
 
 help:                ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*##"}; {printf "  %-16s %s\n", $$1, $$2}'
@@ -22,6 +22,9 @@ install:             ## Install Python deps and UI node modules
 	git submodule update --init ui/src
 	pip install -e ".[local_llm]"
 	cd $(UI_SRC) && npm ci
+
+install-dev:         ## Install runtime + testing + quality tool dependencies
+	pip install -e ".[testing,dev]"
 
 install-torch-cpu:   ## Install CPU-only PyTorch (no GPU required)
 	pip install torch --index-url https://download.pytorch.org/whl/cpu
@@ -92,6 +95,19 @@ sync-ui:             ## Pull latest UI commits and stage the new submodule pin
 
 test:                ## Run smoke tests (run 'make build' first)
 	$(PYTHON) -m pytest tests/ -v
+
+test-cov:            ## Run tests with coverage report
+	$(PYTHON) -m pytest tests/ -v \
+		--cov=src/api --cov=src/services --cov=src/server.py \
+		--cov-report=term-missing --cov-report=xml --cov-fail-under=50
+
+lint:                ## Lint Python code with Ruff
+	$(PYTHON) -m ruff check src/api src/services src/server.py tests
+
+typecheck:           ## Static type-check API/service layer
+	$(PYTHON) -m mypy
+
+quality: lint typecheck test-cov  ## Run all CI-equivalent quality checks
 
 # ── Clean ──────────────────────────────────────────────────────────────────────
 
