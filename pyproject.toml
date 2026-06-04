@@ -68,6 +68,10 @@ testing = [
 [project.scripts]
 vab = "main:main"
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 packages = { find = { where = ["src"] } }

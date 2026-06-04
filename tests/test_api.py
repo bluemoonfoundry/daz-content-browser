@@ -1,11 +1,6 @@
 """API smoke tests — run in demo mode, no real database required."""
-import sys
-from pathlib import Path
-
 import pytest
 from fastapi.testclient import TestClient
-
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 
 @pytest.fixture(scope="module")
