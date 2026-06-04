@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "daz_content_browser",
+  "project_id": "9a41c065-c345-4a10-8f49-362aa68780f3"
+}
