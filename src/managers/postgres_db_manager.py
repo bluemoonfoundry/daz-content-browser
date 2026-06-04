@@ -244,6 +244,7 @@ def generate_and_store_embeddings(processed_skus, on_progress=None):
                 "tags":              row["tags"] or "",
                 "category":          row["category"] or "",
                 "subcategories":     row["subcategories"] or "",
+                "asset_count":       row["asset_count"] or 0,
             }
             for row in rows_to_embed
         ]
@@ -435,6 +436,7 @@ def main(args, on_progress=None):
                     "inferred_tags":        None,
                     "enriched_at":          datetime.now(timezone.utc).isoformat(),
                     "mature":               web_data.get('mature'),
+                    "asset_count":          product.get('content_item_count'),
                 })
                 if ok:
                     successfully_processed_skus.append(sku)

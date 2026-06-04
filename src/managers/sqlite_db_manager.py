@@ -36,9 +36,14 @@ class SQLiteWrapper:
                 sku TEXT PRIMARY KEY, url TEXT, image_url TEXT, store TEXT, name TEXT, artist TEXT, price TEXT, description TEXT,
                 tags TEXT, formats TEXT, poly_count TEXT, textures_info TEXT, required_products TEXT, compatible_figures TEXT,
                 compatible_software TEXT, embedding_text TEXT, last_updated TEXT, category TEXT, subcategories TEXT, styles TEXT,
-                inferred_tags TEXT, enriched_at TEXT, mature INTEGER
+                inferred_tags TEXT, enriched_at TEXT, mature INTEGER, asset_count INTEGER
             )
         ''')
+        try:
+            cursor.execute(f"ALTER TABLE {self.sqlite_db_table} ADD COLUMN asset_count INTEGER")
+            conn.commit()
+        except Exception:
+            pass  # column already exists
         conn.commit()
         conn.close()
         self._logger.info(f"SQLite database '{self.sqlite_db_path}' / table '{self.sqlite_db_table}' ready.")
@@ -78,7 +83,7 @@ class SQLiteWrapper:
         placeholders = ','.join(['?'] * len(sku_batch))
         
         sqlite_query = f"""
-            SELECT sku, url, image_url, embedding_text, name, artist, compatible_figures, tags, category, subcategories
+            SELECT sku, url, image_url, embedding_text, name, artist, compatible_figures, tags, category, subcategories, asset_count
             FROM {self.sqlite_db_table}
             WHERE sku IN ({placeholders})
         """

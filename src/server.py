@@ -97,7 +97,7 @@ def _format_product(row: dict) -> dict:
     result["store_url"] = result.pop("url", None) or ""
     result["install_date"] = result.get("enriched_at")
     result["is_installed"] = True
-    result["asset_count"] = 0
+    result["asset_count"] = result.get("asset_count") or 0
     return result
 
 
@@ -320,7 +320,7 @@ def list_products(
                 "image_url": None,
                 "is_installed": True,
                 "install_date": p["metadata"].get("last_updated"),
-                "asset_count": 0,
+                "asset_count": p["metadata"].get("asset_count") or 0,
             }
             for p in page_products
         ]
@@ -420,7 +420,7 @@ def run_search(request: UISearchRequest):
                 "install_date": r["metadata"].get("last_updated"),
                 "last_updated": r["metadata"].get("last_updated"),
                 "relevance_score": r.get("relevance_score"),
-                "asset_count": 0,
+                "asset_count": r["metadata"].get("asset_count") or 0,
             }
             for r in raw.get("results", [])
         ]

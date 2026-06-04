@@ -215,46 +215,6 @@ class ChromaDbManager:
         }
         
 
-    def load_sqlite_to_chroma(self, valid_products:list) -> bool:
-        """
-        If rebuild then reads all products from an SQLite database, generates new embeddings,
-        and completely rebuilds the ChromaDB collection. Otherwise, only update the Chroma
-        database with products that are newer than the checkpoint_date
-
-        Args:
-            valid_products (list): List of product dictionaries to be added/updated in ChromaDB
-
-        Returns:
-            bool: True if the operation was successful, False otherwise.
-        """
-                
-        texts_to_embed = [p["embedding_text"] for p in valid_products]
-        ids_to_upsert = [str(p["sku"]) for p in valid_products]
-        metadatas_to_upsert: list[dict[str, str | int | float | bool | None]] = [
-            self._clean_metadata(p) for p in valid_products
-        ]
-        documents_to_upsert = [p["embedding_text"] for p in valid_products]
-
-        # --- 4. Generate All Embeddings in a Single Batch ---
-        logger.info(f"Generating embeddings for {len(texts_to_embed)} documents...")
-        embedding_list = generate_embeddings(texts_to_embed, is_query=False).tolist()
-        logger.info("Embeddings generated successfully.")
-
-        # --- 5. Upsert the Batch into ChromaDB ---
-        try:
-            self.collection.upsert(
-                ids=ids_to_upsert,
-                embeddings=embedding_list,
-                documents=documents_to_upsert,
-                metadatas=metadatas_to_upsert,
-            )
-            logger.info(f"Upserted {len(ids_to_upsert)} documents into collection '{self.collection_name}'.")
-        except Exception as e:
-            logger.error(f"Error publishing to ChromaDB: {e}")
-            return False
-
-        return True
-    
     def get_db_stats(self):
         """Returns the total document count from the ChromaDB collection.
 
