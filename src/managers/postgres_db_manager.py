@@ -93,7 +93,11 @@ async def _scrape_all_async(products_data: list, concurrency: int, on_progress=N
     async def scrape_one(i, product):
         nonlocal completed
         sku = product.get('sku')
-        web_data = await _scrape_product_page_async(session, semaphore, sku)
+        try:
+            web_data = await _scrape_product_page_async(session, semaphore, sku)
+        except Exception:
+            logger.exception(f"Scrape failed for SKU {sku!r}, using empty web_data.")
+            web_data = {}
         results[i] = (product, web_data)
         completed += 1
         if on_progress:
