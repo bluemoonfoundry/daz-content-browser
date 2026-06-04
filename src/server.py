@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import subprocess
 import sys
@@ -146,6 +147,7 @@ class UISearchRequest(BaseModel):
     query: str
     filters: Optional[SearchFilters] = None
     limit: int = 25
+    page: int = 1
     min_relevance: float = 0.0
 
 
@@ -417,12 +419,16 @@ def run_search(request: UISearchRequest):
             }
             for r in raw.get("results", [])
         ]
-        return {"results": results, "total": len(results), "query": request.query, "took_ms": 0}
+        total = len(results)
+        total_pages = max(1, math.ceil(total / request.limit))
+        return {"results": results, "total": total, "total_pages": total_pages, "query": request.query, "took_ms": 0}
 
     f = request.filters or SearchFilters()
+    offset = (request.page - 1) * request.limit
     raw = chroma_db_manager.search(
         prompt=request.query,
         limit=request.limit,
+        offset=offset,
         categories=[f.category] if f.category else None,
         artists=[f.artist] if f.artist else None,
         compatible_figures=[f.compatible_figures] if f.compatible_figures else None,
@@ -436,7 +442,9 @@ def run_search(request: UISearchRequest):
     ]
     if request.min_relevance > 0:
         results = [r for r in results if r.get("relevance_score", 0) >= request.min_relevance]
-    return {"results": results, "total": len(results), "query": request.query, "took_ms": raw.get("took_ms", 0)}
+    total = raw.get("total_hits", len(results))
+    total_pages = max(1, math.ceil(total / request.limit))
+    return {"results": results, "total": total, "total_pages": total_pages, "query": request.query, "took_ms": raw.get("took_ms", 0)}
 
 
 @app.post("/api/v1/query")
