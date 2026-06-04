@@ -1,16 +1,17 @@
+import asyncio
 import logging
 import os
 import argparse
 import json
-import time
 from datetime import datetime, timezone
 from pathlib import Path
-from utilities import fetch_json_from_url, fetch_html_content
+from utilities import fetch_json_from_url, fetch_html_content, async_fetch_json_from_url, async_fetch_html_content
 from managers.managers import chroma_db_manager, sqlite_db, daz_pg_analyzer
 from embedding_utils import generate_embeddings
 import re
 from collections import Counter
 
+import aiohttp
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -41,12 +42,71 @@ def determine_categories(content_type_string: str) -> dict:
     unique_words.discard(primary_category)
     return {'category': primary_category, 'subcategories': sorted(list(unique_words))}
 
-def scrape_product_page(sku):
-    """Given a SKU, fetch additional product details by scraping the product page.
+async def _scrape_product_page_async(
+    session: aiohttp.ClientSession, semaphore: asyncio.Semaphore, sku: str
+) -> dict:
+    """Async version of scrape_product_page — reuses a shared session and semaphore."""
+    rv = {}
+    slab_url = f'https://www.daz3d.com/dazApi/slab/{sku}'
+    async with semaphore:
+        base_content = await async_fetch_json_from_url(session, slab_url)
+        if base_content is not None:
+            mark_url = base_content.get('url', '')
+            if mark_url.startswith("/"):
+                mark_url = mark_url[1:]
+            product_page_url = f'https://www.daz3d.com/{mark_url}'
 
-    Args:
-        sku (str): The SKU of the product to scrape.
+            raw_image = base_content.get('imageUrl', '')
+            idx = raw_image.find('/http')
+            image_url = raw_image[idx + 1:] if idx != -1 else raw_image
+
+            prices = base_content.get('prices', {})
+            price = prices.get('USD', 'Unknown')
+
+            rv = {
+                'url': product_page_url,
+                'image_url': image_url,
+                'price': f"${price}",
+                'mature': base_content.get('mature'),
+            }
+
+            _, tags = await async_fetch_html_content(session, product_page_url)
+            if tags is not None:
+                rv['description'] = tags.get('og:description')
+                rv['tags'] = tags.get('keywords')
+
+    return rv
+
+
+async def _scrape_all_async(products_data: list, concurrency: int, on_progress=None) -> list:
+    """Scrapes all products concurrently.
+
+    Returns a list of (product_data, web_data) tuples in the same order as products_data.
     """
+    total = len(products_data)
+    results = [None] * total
+    completed = 0
+
+    semaphore = asyncio.Semaphore(concurrency)
+    connector = aiohttp.TCPConnector(limit=concurrency)
+
+    async def scrape_one(i, product):
+        nonlocal completed
+        sku = product.get('sku')
+        web_data = await _scrape_product_page_async(session, semaphore, sku)
+        results[i] = (product, web_data)
+        completed += 1
+        if on_progress:
+            on_progress("scrape", completed, total, product.get('product_name', sku))
+
+    async with aiohttp.ClientSession(connector=connector) as session:
+        await asyncio.gather(*[scrape_one(i, p) for i, p in enumerate(products_data)])
+
+    return results
+
+
+def scrape_product_page(sku):
+    """Synchronous scrape for a single SKU (used outside the ETL batch path)."""
     rv = {}
     slab_url = f'https://www.daz3d.com/dazApi/slab/{sku}'
     base_content = fetch_json_from_url(slab_url)
@@ -70,8 +130,6 @@ def scrape_product_page(sku):
             'mature': base_content.get('mature'),
         }
 
-        # Now go to the product page. The main thing we need from that page is a description
-        time.sleep(0.2)  # avoid rate-limiting daz3d.com
         html_content, tags = fetch_html_content(product_page_url)
         if tags is not None:
             rv['description'] = tags.get('og:description')
@@ -321,11 +379,22 @@ def main(args, on_progress=None):
 
         total_etl = len(products_to_process_data)
         failed_skus = []
-        for etl_idx, product in enumerate(products_to_process_data):
+
+        # --- Phase 1: Async concurrent web scraping ---
+        concurrency = int(os.getenv("ETL_SCRAPE_CONCURRENCY", "10"))
+        logger.info(f"Scraping {total_etl} products (concurrency={concurrency})…")
+
+        def _scrape_progress(stage, current, total, detail):
+            if on_progress:
+                on_progress("etl", current, total, detail)
+
+        scraped = asyncio.run(_scrape_all_async(products_to_process_data, concurrency, _scrape_progress))
+
+        # --- Phase 2: Serial SQLite inserts (fast, no network I/O) ---
+        logger.info("Scraping complete. Inserting into SQLite…")
+        for product, web_data in scraped:
             sku = product.get('sku')
             try:
-                logger.info(f"Processing '{product.get('product_name')}' (SKU: {sku})")
-
                 refactored_data = determine_compatibility(product, figure_names)
 
                 final_tags = ', '.join(filter(None, [
@@ -333,7 +402,6 @@ def main(args, on_progress=None):
                     refactored_data['tags_to_append']
                 ]))
 
-                web_data = scrape_product_page(sku)
                 embedding_text = generate_embedding_text(product, web_data)
                 structured_categories = determine_categories(product.get('content_types'))
                 subcategories_str = ','.join(structured_categories['subcategories'])
@@ -366,8 +434,6 @@ def main(args, on_progress=None):
                 })
                 if ok:
                     successfully_processed_skus.append(sku)
-                    if on_progress:
-                        on_progress("etl", len(successfully_processed_skus), total_etl, product.get('product_name', sku))
                 else:
                     logger.warning(f"SQLite insert failed for SKU {sku!r}, skipping.")
                     failed_skus.append(sku)

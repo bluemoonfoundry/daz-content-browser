@@ -27,6 +27,7 @@ dependencies = [
     "rich",
     "huggingface-hub",
     "requests",
+    "aiohttp",
     "psycopg2-binary",
     "beautifulsoup4",
     "lxml",
