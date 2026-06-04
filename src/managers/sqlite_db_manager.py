@@ -275,6 +275,7 @@ class SQLiteWrapper:
         category: str | None = None,
         artist: str | None = None,
         compatible_figure: str | None = None,
+        name_query: str | None = None,
         sort_by: str = "name",
         sort_dir: str = "asc",
     ) -> dict:
@@ -305,6 +306,9 @@ class SQLiteWrapper:
                 "OR compatible_figures LIKE ? OR compatible_figures = ?)"
             )
             params += [f"%,{cf},%", f"{cf},%", f"%,{cf}", cf]
+        if name_query:
+            conditions.append("name LIKE ?")
+            params.append(f"%{name_query}%")
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 

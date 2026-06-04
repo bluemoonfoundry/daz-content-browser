@@ -287,6 +287,7 @@ def list_products(
     category: Optional[str] = None,
     artist: Optional[str] = None,
     compatible_figure: Optional[str] = None,
+    name_query: Optional[str] = None,
     sort_by: str = "name",
     sort_dir: str = "asc",
 ):
@@ -300,6 +301,9 @@ def list_products(
             all_products = [p for p in all_products if p["metadata"].get("artist") == artist]
         if compatible_figure:
             all_products = [p for p in all_products if compatible_figure in p["metadata"].get("compatible_figures", "")]
+        if name_query:
+            nq = name_query.lower()
+            all_products = [p for p in all_products if nq in p["metadata"].get("name", "").lower()]
         total = len(all_products)
         start = (page - 1) * page_size
         page_products = all_products[start: start + page_size]
@@ -329,6 +333,7 @@ def list_products(
         category=category,
         artist=artist,
         compatible_figure=compatible_figure,
+        name_query=name_query,
         sort_by=sort_by,
         sort_dir=sort_dir,
     )
