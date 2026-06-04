@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import subprocess
 import sys
@@ -96,7 +97,7 @@ def _format_product(row: dict) -> dict:
     result["store_url"] = result.pop("url", None) or ""
     result["install_date"] = result.get("enriched_at")
     result["is_installed"] = True
-    result["asset_count"] = 0
+    result["asset_count"] = result.get("asset_count") or 0
     return result
 
 
@@ -146,6 +147,7 @@ class UISearchRequest(BaseModel):
     query: str
     filters: Optional[SearchFilters] = None
     limit: int = 25
+    page: int = 1
     min_relevance: float = 0.0
 
 
@@ -285,6 +287,7 @@ def list_products(
     category: Optional[str] = None,
     artist: Optional[str] = None,
     compatible_figure: Optional[str] = None,
+    name_query: Optional[str] = None,
     sort_by: str = "name",
     sort_dir: str = "asc",
 ):
@@ -298,6 +301,9 @@ def list_products(
             all_products = [p for p in all_products if p["metadata"].get("artist") == artist]
         if compatible_figure:
             all_products = [p for p in all_products if compatible_figure in p["metadata"].get("compatible_figures", "")]
+        if name_query:
+            nq = name_query.lower()
+            all_products = [p for p in all_products if nq in p["metadata"].get("name", "").lower()]
         total = len(all_products)
         start = (page - 1) * page_size
         page_products = all_products[start: start + page_size]
@@ -314,7 +320,7 @@ def list_products(
                 "image_url": None,
                 "is_installed": True,
                 "install_date": p["metadata"].get("last_updated"),
-                "asset_count": 0,
+                "asset_count": p["metadata"].get("asset_count") or 0,
             }
             for p in page_products
         ]
@@ -327,6 +333,7 @@ def list_products(
         category=category,
         artist=artist,
         compatible_figure=compatible_figure,
+        name_query=name_query,
         sort_by=sort_by,
         sort_dir=sort_dir,
     )
@@ -413,16 +420,20 @@ def run_search(request: UISearchRequest):
                 "install_date": r["metadata"].get("last_updated"),
                 "last_updated": r["metadata"].get("last_updated"),
                 "relevance_score": r.get("relevance_score"),
-                "asset_count": 0,
+                "asset_count": r["metadata"].get("asset_count") or 0,
             }
             for r in raw.get("results", [])
         ]
-        return {"results": results, "total": len(results), "query": request.query, "took_ms": 0}
+        total = len(results)
+        total_pages = max(1, math.ceil(total / request.limit))
+        return {"results": results, "total": total, "total_pages": total_pages, "query": request.query, "took_ms": 0}
 
     f = request.filters or SearchFilters()
+    offset = (request.page - 1) * request.limit
     raw = chroma_db_manager.search(
         prompt=request.query,
         limit=request.limit,
+        offset=offset,
         categories=[f.category] if f.category else None,
         artists=[f.artist] if f.artist else None,
         compatible_figures=[f.compatible_figures] if f.compatible_figures else None,
@@ -436,7 +447,9 @@ def run_search(request: UISearchRequest):
     ]
     if request.min_relevance > 0:
         results = [r for r in results if r.get("relevance_score", 0) >= request.min_relevance]
-    return {"results": results, "total": len(results), "query": request.query, "took_ms": raw.get("took_ms", 0)}
+    total = raw.get("total_hits", len(results))
+    total_pages = max(1, math.ceil(total / request.limit))
+    return {"results": results, "total": total, "total_pages": total_pages, "query": request.query, "took_ms": raw.get("took_ms", 0)}
 
 
 @app.post("/api/v1/query")
@@ -594,33 +607,38 @@ def browse_product(product_id: str):
 
 @app.get("/api/v1/info")
 def get_info():
-    """Full stats including histograms (expensive; for MCP/dashboard use)."""
+    """Full stats including filter lists (for MCP/dashboard use)."""
     if APP_MODE == "demo":
         logger.info("Demo mode: returning mock database stats.")
         return get_demo_stats_mock()
 
-    stats = chroma_db_manager.get_db_stats()
-    if stats is None:
+    total_docs = chroma_db_manager.collection.count()
+    if total_docs == 0:
         raise HTTPException(status_code=404, detail="Database collection not found or empty.")
 
+    filter_values = sqlite_db.get_filter_values()
+    last_update = sqlite_db.get_last_updated()
     postgres_count = daz_pg_analyzer.count_skus()
     sqlite_count = sqlite_db.count()
 
     logger.info(
         f"/info: postgres={postgres_count}, sqlite={sqlite_count}, "
-        f"chromadb={stats['total_docs']}, "
-        f"new_products={max(0, postgres_count - stats['total_docs'])}"
+        f"chromadb={total_docs}, "
+        f"new_products={max(0, postgres_count - total_docs)}"
     )
 
-    stats["total_products_postgres"] = postgres_count
-    stats["total_products_sqlite"] = sqlite_count
-    stats["new_products"] = max(0, postgres_count - stats["total_docs"])
-
-    if "histograms" in stats and stats["histograms"]:
-        for key, counter in stats["histograms"].items():
-            stats["histograms"][key] = dict(counter)
-
-    return stats
+    return {
+        "total_docs": total_docs,
+        "last_update": last_update,
+        "histograms": {
+            "categories": filter_values["categories"],
+            "artists": filter_values["artists"],
+            "compatible_figures": filter_values["compatible_figures"],
+        },
+        "total_products_postgres": postgres_count,
+        "total_products_sqlite": sqlite_count,
+        "new_products": max(0, postgres_count - total_docs),
+    }
 
 
 # ── Asset file helpers ─────────────────────────────────────────────────────────

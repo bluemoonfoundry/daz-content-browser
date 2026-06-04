@@ -27,6 +27,7 @@ dependencies = [
     "rich",
     "huggingface-hub",
     "requests",
+    "aiohttp",
     "psycopg2-binary",
     "beautifulsoup4",
     "lxml",
@@ -66,6 +67,10 @@ testing = [
 
 [project.scripts]
 vab = "main:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

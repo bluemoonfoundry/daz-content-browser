@@ -1,10 +1,7 @@
 """ Manages interactions with ChromaDB for vector storage and retrieval. """
 
 import chromadb
-import json
 import logging
-import os
-from collections import Counter
 from typing import List, Optional
 from embedding_utils import generate_embeddings
 
@@ -218,113 +215,11 @@ class ChromaDbManager:
         }
         
 
-    def load_sqlite_to_chroma(self, valid_products:list) -> bool:
-        """
-        If rebuild then reads all products from an SQLite database, generates new embeddings,
-        and completely rebuilds the ChromaDB collection. Otherwise, only update the Chroma
-        database with products that are newer than the checkpoint_date
-
-        Args:
-            valid_products (list): List of product dictionaries to be added/updated in ChromaDB
-
-        Returns:
-            bool: True if the operation was successful, False otherwise.
-        """
-                
-        texts_to_embed = [p["embedding_text"] for p in valid_products]
-        ids_to_upsert = [str(p["sku"]) for p in valid_products]
-        metadatas_to_upsert: list[dict[str, str | int | float | bool | None]] = [
-            self._clean_metadata(p) for p in valid_products
-        ]
-        documents_to_upsert = [p["embedding_text"] for p in valid_products]
-
-        # --- 4. Generate All Embeddings in a Single Batch ---
-        logger.info(f"Generating embeddings for {len(texts_to_embed)} documents...")
-        embedding_list = generate_embeddings(texts_to_embed, is_query=False).tolist()
-        logger.info("Embeddings generated successfully.")
-
-        # --- 5. Upsert the Batch into ChromaDB ---
-        try:
-            self.collection.upsert(
-                ids=ids_to_upsert,
-                embeddings=embedding_list,
-                documents=documents_to_upsert,
-                metadatas=metadatas_to_upsert,
-            )
-            logger.info(f"Upserted {len(ids_to_upsert)} documents into collection '{self.collection_name}'.")
-        except Exception as e:
-            logger.error(f"Error publishing to ChromaDB: {e}")
-            return False
-
-        return True
-    
     def get_db_stats(self):
-        """Gathers and returns statistics and histograms for all key filterable fields.
+        """Returns the total document count from the ChromaDB collection.
 
         Returns:
-            dict: A dictionary containing total document count, last update date, and histograms for tags, artists, compatible figures, and categories. 
+            dict: A dictionary containing total document count.
         """
-
-        total_docs = self.collection.count()
-        if total_docs == 0:
-            return {"total_docs": 0, "last_update": "N/A", "histograms": {}}
-
-        all_metadatas = self.collection.get(include=["metadatas"])["metadatas"]
-
-        # Initialize Counters for Histograms
-        tag_counter, artist_counter, figure_counter, category_counter = (
-            Counter(),
-            Counter(),
-            Counter(),
-            Counter(),
-        )
-
-        # Find the Last Update Date
-        last_update_dates = [
-            meta.get("last_updated") for meta in all_metadatas if meta.get("last_updated")
-        ]
-        last_update = max(last_update_dates) if last_update_dates else "N/A"
-
-        # Iterate and Process All Metadata
-        for meta in all_metadatas:
-            if category := meta.get("category"):
-                category_counter.update([category])
-
-            def parse_and_update_counter(field_name: str, counter: Counter):
-                value = meta.get(field_name)
-                if value:
-                    try:
-                        if isinstance(value, list):
-                            item_list = value
-                        else:
-                            item_list = str(value).split(",")
-                        counter.update(x.strip() for x in item_list if x.strip())
-                    except TypeError:
-                        pass  # Ignore malformed data
-
-            parse_and_update_counter("tags", tag_counter)
-            parse_and_update_counter("artist", artist_counter)
-            parse_and_update_counter("compatible_figures", figure_counter)
-
-
-        # We need to reduce the tag list because it may be very long when it contains small counts
-        threshold = int(os.getenv("STATS_TAG_THRESHOLD", "10"))
-        filtered_dict = {
-            item: count 
-            for item, count in tag_counter.items() 
-            if count >= threshold
-        }
-        
-        tag_counter = Counter(filtered_dict)
-        
-        return { 
-            "total_docs": total_docs,
-            "last_update": last_update,
-            "histograms": {
-                "tags": tag_counter,
-                "artists": artist_counter,
-                "compatible_figures": figure_counter,
-                "categories": category_counter,
-            },
-        }
+        return {"total_docs": self.collection.count()}
 

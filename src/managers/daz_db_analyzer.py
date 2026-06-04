@@ -2,6 +2,7 @@ import logging
 import os
 import psycopg2
 import psycopg2.extras
+import psycopg2.pool
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -72,13 +73,15 @@ class DazDBAnalyzer:
                 f"DazDBAnalyzer: missing required environment variable(s): {', '.join(missing)}"
             )
 
-        self.db_config = {
+        db_config = {
             "dbname":   os.environ["DB_NAME"],
             "user":     os.environ["DB_USER"],
             "password": os.environ.get("DB_PASS", ""),
             "host":     os.environ["DB_HOST"],
             "port":     os.environ["DB_PORT"],
         }
+        pool_max = int(os.getenv("DB_POOL_MAX", "5"))
+        self._pool = psycopg2.pool.ThreadedConnectionPool(1, pool_max, **db_config)
         self.batch_size = int(os.getenv("BATCH_SIZE", 512))
 
     def _execute_query(self, sql, params=None):
@@ -92,17 +95,17 @@ class DazDBAnalyzer:
             list: A list of dictionaries representing the query results.
         """
 
-        results = []
+        conn = self._pool.getconn()
         try:
-            with psycopg2.connect(**self.db_config) as conn:
-                with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-                    cur.execute(sql, params)
-                    if cur.description:
-                        results = cur.fetchall()
+            with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+                cur.execute(sql, params)
+                results = cur.fetchall() if cur.description else []
+            return [dict(row) for row in results]
         except psycopg2.Error as e:
             logger.error(f"PostgreSQL error: {e}")
             return None
-        return [dict(row) for row in results]
+        finally:
+            self._pool.putconn(conn)
 
     def get_all_skus(self):
         """Efficiently fetches a list of all non-null AND non-empty SKUs from PostgreSQL.
@@ -192,3 +195,7 @@ class DazDBAnalyzer:
             if batch_results:
                 all_products.extend(batch_results)
         return all_products
+
+    def close(self):
+        """Closes all connections in the pool."""
+        self._pool.closeall()

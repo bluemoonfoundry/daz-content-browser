@@ -1,8 +1,10 @@
+import asyncio
 import logging
 import os
 import pathlib
 import subprocess
 import sys
+import aiohttp
 import requests
 from bs4 import BeautifulSoup
 
@@ -160,6 +162,41 @@ def fetch_html_content(url:str) -> tuple:
         logger.error(f"Network error fetching {url}: {e}")
 
     return html_content, tag_attributes
+
+
+async def async_fetch_json_from_url(
+    session: aiohttp.ClientSession, url: str, timeout: int = 10
+) -> dict | None:
+    """Async version of fetch_json_from_url using an existing aiohttp session."""
+    logger.debug(f"Async fetching JSON from: {url}")
+    try:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+            resp.raise_for_status()
+            return await resp.json(content_type=None)
+    except aiohttp.ClientResponseError as e:
+        logger.error(f"HTTP error fetching {url}: {e.status} {e}")
+        return None
+    except (aiohttp.ContentTypeError, ValueError):
+        logger.error(f"Response from {url} is not valid JSON.")
+        return None
+    except Exception as e:
+        logger.error(f"Error fetching {url}: {e}")
+        return None
+
+
+async def async_fetch_html_content(
+    session: aiohttp.ClientSession, url: str, timeout: int = 10
+) -> tuple:
+    """Async version of fetch_html_content using an existing aiohttp session."""
+    try:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+            if resp.status == 200:
+                html = await resp.text()
+                return html, extract_meta_tags(html)
+            logger.warning(f"Failed to fetch {url}: status {resp.status}")
+    except Exception as e:
+        logger.error(f"Network error fetching {url}: {e}")
+    return None, None
 
 
 if __name__ == '__main__':
