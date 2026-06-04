@@ -1,6 +1,7 @@
 """Client for the DAZ Script Server plugin (https://github.com/bluemoonfoundry/daz-script-server)."""
 
 import logging
+import time
 from pathlib import Path
 
 import requests
@@ -51,6 +52,7 @@ class DazScriptServerClient:
         self._token: str | None = None
         self._scripts_registered = False
         self._content_dirs_cache: list[str] | None = None
+        self._availability_cache: tuple[bool, float] | None = None
 
     # ── Token ──────────────────────────────────────────────────────────────────
 
@@ -100,8 +102,17 @@ class DazScriptServerClient:
             "active_requests": 0,
         }
 
+    _AVAILABILITY_TTL = 10.0
+
     def is_available(self) -> bool:
-        return self.status().get("plugin_detected", False)
+        now = time.monotonic()
+        if self._availability_cache is not None:
+            result, ts = self._availability_cache
+            if now - ts < self._AVAILABILITY_TTL:
+                return result
+        result = self.status().get("plugin_detected", False)
+        self._availability_cache = (result, now)
+        return result
 
     # ── Script registry ────────────────────────────────────────────────────────
 
