@@ -268,6 +268,23 @@ class SQLiteWrapper:
         finally:
             conn.close()
 
+    def get_last_updated(self) -> str:
+        """Returns the most recent last_updated value across all products, or 'N/A'."""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"SELECT MAX(last_updated) FROM {self.sqlite_db_table} "
+                "WHERE last_updated IS NOT NULL AND last_updated != ''"
+            )
+            result = cursor.fetchone()
+            return result[0] if result and result[0] else "N/A"
+        except Exception as e:
+            self._logger.error(f"Error fetching last_updated: {e}")
+            return "N/A"
+        finally:
+            conn.close()
+
     def get_products(
         self,
         page: int = 1,

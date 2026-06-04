@@ -18,7 +18,7 @@ from output_formatters import print_pretty, print_json, print_table
 from utilities import open_daz_product
 import uvicorn
 
-from managers.managers import chroma_db_manager
+from managers.managers import chroma_db_manager, sqlite_db
 
 def load_command(args):
     """Loads data from DAZ Postgres to SQLite and ChromaDB."""
@@ -84,30 +84,20 @@ def stats_command(args):
 
     print("Gathering statistics from the database...")
     stats = chroma_db_manager.get_db_stats()
-    if stats is None:
-        return
-    
+    last_update = sqlite_db.get_last_updated()
+    filter_values = sqlite_db.get_filter_values()
+
     print("\n--- ChromaDB Collection Stats ---")
     print(f"Total Documents Indexed: {stats['total_docs']}")
-    print(f"Last Document Update:    {stats['last_update']}")
+    print(f"Last Document Update:    {last_update}")
     print("---------------------------------")
-    
-    if stats["histograms"]:
-        
-        for key in stats["histograms"]:
-            histogram = list(stats["histograms"][key])
-            llen = len(histogram)
-            maxlen = llen
-            if llen > 0:
-                if llen > 25:
-                    llen=25
 
-                print (f"\n -- Category {key} {llen} of {maxlen}")
-                for tag, count in stats["histograms"][key].most_common(llen):
-                    print(f"{tag:<30} | {count}")
-                print("-------------------------------")
-    else:
-        print("\nNo tag information found.")
+    for key, values in filter_values.items():
+        display = values[:25]
+        print(f"\n -- {key} ({len(display)} of {len(values)})")
+        for v in display:
+            print(f"  {v}")
+        print("-------------------------------")
 
 
 def server_command(args):

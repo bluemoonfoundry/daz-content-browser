@@ -607,33 +607,38 @@ def browse_product(product_id: str):
 
 @app.get("/api/v1/info")
 def get_info():
-    """Full stats including histograms (expensive; for MCP/dashboard use)."""
+    """Full stats including filter lists (for MCP/dashboard use)."""
     if APP_MODE == "demo":
         logger.info("Demo mode: returning mock database stats.")
         return get_demo_stats_mock()
 
-    stats = chroma_db_manager.get_db_stats()
-    if stats is None:
+    total_docs = chroma_db_manager.collection.count()
+    if total_docs == 0:
         raise HTTPException(status_code=404, detail="Database collection not found or empty.")
 
+    filter_values = sqlite_db.get_filter_values()
+    last_update = sqlite_db.get_last_updated()
     postgres_count = daz_pg_analyzer.count_skus()
     sqlite_count = sqlite_db.count()
 
     logger.info(
         f"/info: postgres={postgres_count}, sqlite={sqlite_count}, "
-        f"chromadb={stats['total_docs']}, "
-        f"new_products={max(0, postgres_count - stats['total_docs'])}"
+        f"chromadb={total_docs}, "
+        f"new_products={max(0, postgres_count - total_docs)}"
     )
 
-    stats["total_products_postgres"] = postgres_count
-    stats["total_products_sqlite"] = sqlite_count
-    stats["new_products"] = max(0, postgres_count - stats["total_docs"])
-
-    if "histograms" in stats and stats["histograms"]:
-        for key, counter in stats["histograms"].items():
-            stats["histograms"][key] = dict(counter)
-
-    return stats
+    return {
+        "total_docs": total_docs,
+        "last_update": last_update,
+        "histograms": {
+            "categories": filter_values["categories"],
+            "artists": filter_values["artists"],
+            "compatible_figures": filter_values["compatible_figures"],
+        },
+        "total_products_postgres": postgres_count,
+        "total_products_sqlite": sqlite_count,
+        "new_products": max(0, postgres_count - total_docs),
+    }
 
 
 # ── Asset file helpers ─────────────────────────────────────────────────────────
