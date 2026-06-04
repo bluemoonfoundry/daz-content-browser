@@ -119,6 +119,7 @@ class DazScriptServerClient:
     def _ensure_scripts_registered(self) -> None:
         if self._scripts_registered:
             return
+        self._scripts_registered = True
         for name, info in _STANDARD_SCRIPTS.items():
             try:
                 r = requests.post(
@@ -133,7 +134,6 @@ class DazScriptServerClient:
                     logger.warning(f"DAZ Script Server: could not register '{name}': {r.status_code}")
             except Exception as e:
                 logger.warning(f"DAZ Script Server: registration error for '{name}': {e}")
-        self._scripts_registered = True
 
     # ── Execution helpers ──────────────────────────────────────────────────────
 
