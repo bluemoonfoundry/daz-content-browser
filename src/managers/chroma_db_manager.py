@@ -123,33 +123,37 @@ class ChromaDbManager:
         compatible_figures: Optional[List[str]] = None,
         limit: int = 10,
         offset: int = 0,
+        max_results: int = 500,
         score_threshold: float = 1.0,
         sort_by: str = "relevance",
         sort_order: str = "descending",
     ):
-        """ Searches the ChromaDB collection with the given parameters.
+        """Searches the ChromaDB collection with the given parameters.
 
         Args:
-            prompt (str): The search prompt to generate the query embedding.    
+            prompt (str): The search prompt to generate the query embedding.
             tags (List[str], optional): List of tags to filter by. Defaults to None.
             artists (List[str], optional): List of artists to filter by. Defaults to None.
             categories (List[str], optional): List of categories to filter by. Defaults to None.
             compatible_figures (List[str], optional): List of compatible figures to filter by. Defaults to None.
-            limit (int, optional): Number of results to return. Defaults to 10. Max 100.
-            offset (int, optional): Offset for pagination. Defaults to 0.           
-            score_threshold (float, optional): Maximum distance for a result to be considered relevant. Defaults to 2.0.
+            limit (int, optional): Number of results to return from the filtered set. Defaults to 10.
+                Used by the MCP /query endpoint. The UI /search endpoint uses max_results instead.
+            offset (int, optional): Offset into the filtered result set. Defaults to 0.
+                Used by the MCP /query endpoint. The UI /search endpoint always passes 0.
+            max_results (int, optional): Maximum number of candidates to fetch from ChromaDB.
+                This is the fixed pool size — independent of limit/offset — so total_hits is
+                stable across requests. Defaults to 500. The UI /search endpoint controls this
+                directly; the MCP /query endpoint leaves it at the default.
+            score_threshold (float, optional): Maximum cosine distance for a result to be
+                included. Defaults to 1.0 (include everything).
             sort_by (str, optional): Field to sort by. Use 'relevance' for cosine-distance order
                 (default), or any metadata field name (e.g. 'name', 'artist').
             sort_order (str, optional): 'ascending' or 'descending'. Only applied when
                 sort_by is not 'relevance'. Defaults to 'descending'.
-        
+
         Returns:
-            dict: Search results including total hits, limit, offset, and list of results.
-
-        Raises:
-            
+            dict: Search results including total_hits, limit, offset, and list of results.
         """
-
 
         # --- 1. Generate Query Embedding ---
         query_embedding = generate_embeddings(prompt, is_query=True)
@@ -164,8 +168,8 @@ class ChromaDbManager:
         if where_filter:
             logger.debug(f"Applying metadata filter: {where_filter}")
 
-        # Fetch a larger number of results to allow for post-filtering, sorting, and pagination
-        query_limit = (offset + limit) * 5 + 20  # A generous buffer
+        # Fixed candidate pool — does not grow with offset/limit so total_hits is stable.
+        query_limit = max_results
 
         # --- 3. Query ChromaDB ---
 

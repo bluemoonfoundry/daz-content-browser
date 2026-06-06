@@ -146,8 +146,7 @@ class SearchFilters(BaseModel):
 class UISearchRequest(BaseModel):
     query: str
     filters: Optional[SearchFilters] = None
-    limit: int = 25
-    page: int = 1
+    max_results: int = 500
     min_relevance: float = 0.0
 
 
@@ -401,10 +400,15 @@ def get_filters():
 
 @app.post("/api/v1/search")
 def run_search(request: UISearchRequest):
-    """UI/vector semantic search. Accepts { query, filters, limit, min_relevance }."""
+    """UI/vector semantic search. Accepts { query, filters, max_results, min_relevance }.
+
+    Returns all matching results up to max_results in a single response. Pagination is
+    left to the client — this avoids the unstable total_hits that occurs when the candidate
+    pool grows with each page request.
+    """
     logger.info(f"Search: query={request.query!r} filters={request.filters}")
     if APP_MODE == "demo":
-        raw = search_mock(prompt=request.query, limit=request.limit)
+        raw = search_mock(prompt=request.query, limit=request.max_results)
         results = [
             {
                 "sku": r["id"],
@@ -424,16 +428,14 @@ def run_search(request: UISearchRequest):
             }
             for r in raw.get("results", [])
         ]
-        total = len(results)
-        total_pages = max(1, math.ceil(total / request.limit))
-        return {"results": results, "total": total, "total_pages": total_pages, "query": request.query, "took_ms": 0}
+        return {"results": results, "total": len(results), "query": request.query, "took_ms": 0}
 
     f = request.filters or SearchFilters()
-    offset = (request.page - 1) * request.limit
     raw = chroma_db_manager.search(
         prompt=request.query,
-        limit=request.limit,
-        offset=offset,
+        limit=request.max_results,
+        offset=0,
+        max_results=request.max_results,
         categories=[f.category] if f.category else None,
         artists=[f.artist] if f.artist else None,
         compatible_figures=[f.compatible_figures] if f.compatible_figures else None,
@@ -447,9 +449,7 @@ def run_search(request: UISearchRequest):
     ]
     if request.min_relevance > 0:
         results = [r for r in results if r.get("relevance_score", 0) >= request.min_relevance]
-    total = raw.get("total_hits", len(results))
-    total_pages = max(1, math.ceil(total / request.limit))
-    return {"results": results, "total": total, "total_pages": total_pages, "query": request.query, "took_ms": raw.get("took_ms", 0)}
+    return {"results": results, "total": len(results), "query": request.query, "took_ms": raw.get("took_ms", 0)}
 
 
 @app.post("/api/v1/query")

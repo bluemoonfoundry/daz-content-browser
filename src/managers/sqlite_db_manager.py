@@ -319,15 +319,15 @@ class SQLiteWrapper:
             conditions.append("category = ?")
             params.append(category)
         if artist:
-            conditions.append("(artist LIKE ? OR artist LIKE ? OR artist LIKE ? OR artist = ?)")
-            params += [f"%,{artist},%", f"{artist},%", f"%,{artist}", artist]
+            conditions.append("(artist = ? OR artist LIKE ? OR artist LIKE ? OR artist LIKE ?)")
+            params += [artist, f"{artist}, %", f"%, {artist}, %", f"%, {artist}"]
         if compatible_figure:
-            cf = compatible_figure
+            cf = compatible_figure.strip()
             conditions.append(
-                "(compatible_figures LIKE ? OR compatible_figures LIKE ? "
-                "OR compatible_figures LIKE ? OR compatible_figures = ?)"
+                "(compatible_figures = ? OR compatible_figures LIKE ? "
+                "OR compatible_figures LIKE ? OR compatible_figures LIKE ?)"
             )
-            params += [f"%,{cf},%", f"{cf},%", f"%,{cf}", cf]
+            params += [cf, f"{cf}, %", f"%, {cf}, %", f"%, {cf}"]
         if name_query:
             conditions.append("name LIKE ?")
             params.append(f"%{name_query}%")
