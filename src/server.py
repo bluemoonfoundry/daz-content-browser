@@ -266,13 +266,16 @@ def start_update(body: UpdateRequest = UpdateRequest(), background_tasks: Backgr
 
     def wrapped_run():
         try:
-            run_update_flow(task_entry, force=body.force)
+            run_update_flow(_current_task, force=body.force)
         finally:
             _current_task.update({
                 "running": False,
-                "progress": task_entry.get("progress", ""),
-                "stage": task_entry.get("stage", ""),
-                "error": task_entry.get("progress", "") if task_entry.get("task_status") == -1 else None,
+                "error": _current_task.get("progress", "") if _current_task.get("task_status") == -1 else None,
+            })
+            task_entry.update({
+                "task_status": _current_task.get("task_status", 0),
+                "stage": _current_task.get("stage", ""),
+                "progress": _current_task.get("progress", ""),
             })
 
     background_tasks.add_task(wrapped_run)
