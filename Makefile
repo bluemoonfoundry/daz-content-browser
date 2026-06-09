@@ -1,4 +1,5 @@
-PYTHON  := python
+PYTHON      := python
+PYINSTALLER := .venv/Scripts/pyinstaller
 UI_SRC  := ui/src
 UI_DIST := ui/dist
 DIST    := dist
@@ -59,7 +60,7 @@ release-wheel:       ## Build pip-installable wheel (run 'make build' first)
 	$(PYTHON) -c "import shutil; shutil.rmtree('src/ui_dist', ignore_errors=True)"
 
 release-exe:         ## Build standalone Windows executable via PyInstaller (run 'make build' first)
-	pyinstaller vab.spec --distpath $(DIST)
+	$(PYINSTALLER) vab.spec --distpath $(DIST) -y
 
 gh-release:          ## Publish dist/ to a GitHub release (VERSION=v1.0.0 [TITLE="..."] [NOTES="..."] [UPDATE=1])
 	@test -n "$(VERSION)" || { echo "ERROR: VERSION is required.  make gh-release VERSION=v1.0.0"; exit 1; }
