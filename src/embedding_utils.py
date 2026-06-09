@@ -100,9 +100,12 @@ def generate_embeddings(texts, is_query: bool = False) -> np.ndarray:
 
     logger.debug(f"[embedding] Generating embeddings for {len(texts)} text(s)")
 
+    total = len(texts)
+    n_batches = (total + _INFERENCE_BATCH_SIZE - 1) // _INFERENCE_BATCH_SIZE
     chunks = []
-    for start in range(0, len(texts), _INFERENCE_BATCH_SIZE):
+    for idx, start in enumerate(range(0, total, _INFERENCE_BATCH_SIZE)):
         batch = texts[start: start + _INFERENCE_BATCH_SIZE]
+        logger.info(f"[embedding] Sub-batch {idx + 1}/{n_batches} ({len(batch)} texts)")
         inputs = tokenizer(
             batch,
             max_length=512,
