@@ -4,7 +4,7 @@
 # Build:  make release-exe   (or: pyinstaller vab.spec --distpath dist)
 # Prereq: make build         (populates ui/dist/ first)
 #
-# Output: dist/vab/vab.exe  (~2-3 GB due to PyTorch — distribute as a zip)
+# Output: dist/vab/vab.exe  (distribute as a zip; models/ dir excluded — downloaded on first run)
 # The output directory contains everything; do not move vab.exe out of it.
 
 from PyInstaller.utils.hooks import collect_all, collect_data_files
@@ -28,7 +28,7 @@ hiddenimports = [
     'pydantic.v1',
 ]
 
-for pkg in ('chromadb', 'sentence_transformers', 'transformers'):
+for pkg in ('chromadb', 'transformers', 'onnxruntime', 'optimum'):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b
