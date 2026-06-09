@@ -28,7 +28,7 @@ def determine_categories(content_type_string: str) -> dict:
         dict: A dictionary with 'category' and 'subcategories' keys.
     """
     IGNORE_WORDS = {'follower', 'default', 'support', 'preset', 'people', 'genesis', 'genesis 9', 'genesis 8', 'genesis 3'}
-    PRIORITY_WORDS = {'character', 'clothes', 'accessories', 'environments', 'hair', 'poses', 'animations', 'props', 'tools', 'effects'}
+    PRIORITY_WORDS = {'character', 'clothes', 'wardrobe', 'accessories', 'environments', 'hair', 'poses', 'animations', 'props', 'tools', 'effects'}
     if not content_type_string: return {'category': None, 'subcategories': []}
     words = re.split(r'[^a-zA-Z0-9]+', content_type_string)
     valid_words = [w.lower().strip() for w in words if w.lower().strip() and w.lower().strip() not in IGNORE_WORDS]
