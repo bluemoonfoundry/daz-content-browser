@@ -94,6 +94,19 @@ class ChromaDbManager:
                 clean[key] = value
         return clean
     
+    def reconnect(self) -> None:
+        """Recreates the ChromaDB client and refreshes the collection reference.
+
+        Call this when an upsert fails with a stale-connection or missing-collection
+        error so the next operation gets a fresh handle.
+        """
+        self.client = chromadb.PersistentClient(path=self.chroma_db_path)
+        self.collection = self.client.get_or_create_collection(
+            name=self.collection_name,
+            metadata={"hnsw:space": "cosine"},
+        )
+        logger.info(f"ChromaDB reconnected — path: {self.chroma_db_path!r}, collection: {self.collection_name!r}")
+
     def get_all_ids(self) -> set:
         """Returns the set of all document IDs currently stored in the collection."""
         return set(self.collection.get(include=[])["ids"])

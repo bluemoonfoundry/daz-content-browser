@@ -265,8 +265,21 @@ def generate_and_store_embeddings(processed_skus, on_progress=None):
             if on_progress:
                 on_progress("embed", min(i + BATCH_SIZE, total), total, f"batch {i//BATCH_SIZE + 1}")
         except Exception as e:
-            logger.error(f"Error publishing batch {i//BATCH_SIZE + 1} to ChromaDB: {e}")
-            had_errors = True
+            logger.warning(f"ChromaDB upsert failed ({e}), reconnecting and retrying...")
+            try:
+                chroma_db_manager.reconnect()
+                chroma_db_manager.collection.upsert(
+                    ids=ids,
+                    embeddings=embeddings,
+                    metadatas=metadatas,
+                    documents=documents,
+                )
+                logger.info(f"Upserted {len(ids)} documents after reconnect.")
+                if on_progress:
+                    on_progress("embed", min(i + BATCH_SIZE, total), total, f"batch {i//BATCH_SIZE + 1}")
+            except Exception as e2:
+                logger.error(f"Error publishing batch {i//BATCH_SIZE + 1} to ChromaDB: {e2}")
+                had_errors = True
 
     if had_errors:
         logger.warning("Embedding phase completed with errors — some batches were not indexed.")
