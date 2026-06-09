@@ -2,7 +2,9 @@
 #
 # Quick dev install:
 #   pip install -e ".[local_llm]"
+#
+# CPU-only torch (needed as a transitive dep of optimum[onnxruntime]):
 #   pip install torch --index-url https://download.pytorch.org/whl/cpu
 #
-# For CUDA (replace cu121 with your CUDA version):
-#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+# Note: torch is NOT listed as a direct dependency. Install the CPU build
+# above to avoid pulling in a large CUDA distribution.

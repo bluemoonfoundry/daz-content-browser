@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from embedding_utils import load_embedding_model
 from demo_data import (
     get_demo_search_results as search_mock,
     get_demo_stats as get_demo_stats_mock,
@@ -57,8 +58,8 @@ _SETTINGS_DEFAULTS: dict = {
     "cms_user": os.getenv("DB_USER", ""),
     "cms_password": os.getenv("DB_PASS", ""),
     "cms_schema": os.getenv("DB_SCHEMA", "dzcontent"),
-    "embedding_model": os.getenv("EMBEDDING_MODEL", "mixedbread-ai/mxbai-embed-large-v1"),
-    "query_model": os.getenv("QUERY_MODEL", "mixedbread-ai/mxbai-embed-large-v1"),
+    "embedding_model": os.getenv("EMBEDDING_MODEL", "BAAI/bge-large-en-v1.5"),
+    "query_model": os.getenv("QUERY_MODEL", "BAAI/bge-large-en-v1.5"),
     "daz_script_server_url": os.getenv("DAZ_SCRIPT_SERVER_URL", "http://localhost:18811"),
     "daz_script_server_enabled": os.getenv("DAZ_SCRIPT_SERVER_ENABLED", "false").lower() == "true",
 }
@@ -113,6 +114,7 @@ async def lifespan(app: FastAPI):
         )
     if APP_MODE == "demo":
         logger.info("Server running in DEMO mode — PostgreSQL not required.")
+    load_embedding_model()
     yield
 
 

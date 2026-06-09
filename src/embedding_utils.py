@@ -1,59 +1,113 @@
 import logging
 import os
-from numpy import ndarray
-from sentence_transformers import SentenceTransformer
+from pathlib import Path
+
+import numpy as np
 from dotenv import load_dotenv
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "mixedbread-ai/mxbai-embed-large-v1")
-EMBEDDING_DEVICE = os.getenv("EMBEDDING_DEVICE", "cpu")
+_HF_MODEL_ID = "BAAI/bge-large-en-v1.5"
+_env_model_dir = os.getenv("EMBEDDING_MODEL_DIR", "")
+_MODEL_DIR = Path(_env_model_dir) if _env_model_dir else (Path(__file__).parent.parent / "models" / "bge-large-en-v1.5")
 
-# Global model cache — loaded once per process.
 _model = None
+_tokenizer = None
 
 
-def get_embedding_model() -> SentenceTransformer:
-    """Loads and caches the embedding model specified in the .env file.
+def _export_model():
+    """Download BAAI/bge-large-en-v1.5 from HuggingFace, export to ONNX, and cache locally."""
+    from optimum.onnxruntime import ORTModelForFeatureExtraction
+    from transformers import AutoTokenizer
 
-    The device is set explicitly via EMBEDDING_DEVICE to avoid a meta-tensor
-    error that occurs when 'accelerate' is installed and SentenceTransformer's
-    auto device-detection initialises weights on a meta device first.
-    """
-    global _model
+    logger.info(f"[embedding] First run — exporting {_HF_MODEL_ID} to ONNX. This may take a few minutes.")
+    _MODEL_DIR.mkdir(parents=True, exist_ok=True)
+
+    model = ORTModelForFeatureExtraction.from_pretrained(_HF_MODEL_ID, export=True)
+    model.save_pretrained(str(_MODEL_DIR))
+
+    tokenizer = AutoTokenizer.from_pretrained(_HF_MODEL_ID)
+    tokenizer.save_pretrained(str(_MODEL_DIR))
+
+    logger.info(f"[embedding] Model exported and saved to {_MODEL_DIR}")
+    return model, tokenizer
+
+
+def _load_from_cache():
+    """Load the ONNX model and tokenizer from the local cache directory."""
+    from optimum.onnxruntime import ORTModelForFeatureExtraction
+    from transformers import AutoTokenizer
+
+    logger.info(f"[embedding] Loading ONNX model from local cache: {_MODEL_DIR}")
+    model = ORTModelForFeatureExtraction.from_pretrained(
+        str(_MODEL_DIR),
+        provider="CPUExecutionProvider",
+    )
+    tokenizer = AutoTokenizer.from_pretrained(str(_MODEL_DIR))
+    logger.info("[embedding] ONNX model loaded.")
+    return model, tokenizer
+
+
+def load_embedding_model():
+    """Load (and if necessary export) the model. Intended to be called at server startup."""
+    global _model, _tokenizer
+
+    onnx_path = _MODEL_DIR / "model.onnx"
+    if onnx_path.exists():
+        _model, _tokenizer = _load_from_cache()
+    else:
+        _model, _tokenizer = _export_model()
+
+    return _model, _tokenizer
+
+
+def get_embedding_model():
+    """Return the cached model + tokenizer, initialising them on first call."""
+    global _model, _tokenizer
     if _model is None:
-        logger.info(f"Loading embedding model: {EMBEDDING_MODEL_NAME} on device: {EMBEDDING_DEVICE}")
-        _model = SentenceTransformer(EMBEDDING_MODEL_NAME, device=EMBEDDING_DEVICE)
-        logger.info("Embedding model loaded.")
-    return _model
+        load_embedding_model()
+    return _model, _tokenizer
 
 
-def generate_embeddings(texts, is_query: bool = False) -> ndarray:
-    """Generates embeddings for a given text or list of texts.
+def _mean_pool(last_hidden_state, attention_mask) -> np.ndarray:
+    """Mean-pool token embeddings weighted by the attention mask, then L2-normalise."""
+    hidden = last_hidden_state.numpy() if hasattr(last_hidden_state, "numpy") else np.asarray(last_hidden_state)
+    mask = attention_mask.numpy() if hasattr(attention_mask, "numpy") else np.asarray(attention_mask)
 
-    Handles model-specific prefixes for query vs. passage.
+    mask_exp = np.expand_dims(mask, -1).astype(np.float32)      # (batch, seq, 1)
+    pooled = (hidden * mask_exp).sum(axis=1) / mask_exp.sum(axis=1).clip(min=1e-9)  # (batch, dim)
 
-    Args:
-        texts (str or list[str]): The text(s) to embed.
-        is_query (bool): True if the text is a search query, False if it's a document.
+    norms = np.linalg.norm(pooled, axis=1, keepdims=True)
+    return (pooled / np.maximum(norms, 1e-9)).astype(np.float32)
 
-    Returns:
-        numpy.ndarray: The embedding vector(s).
+
+def generate_embeddings(texts, is_query: bool = False) -> np.ndarray:
+    """Tokenise, run ONNX inference, mean-pool, and L2-normalise.
+
+    Returns float32 ndarray of shape (1024,) for a single string,
+    or (N, 1024) for a list.
     """
-    model = get_embedding_model()
+    model, tokenizer = get_embedding_model()
 
-    logger.debug(f"Generating embeddings with {EMBEDDING_MODEL_NAME}")
+    single = isinstance(texts, str)
+    if single:
+        texts = [texts]
 
-    if "mxbai" in EMBEDDING_MODEL_NAME and is_query:
-        # Ensure that if a list is passed, we prefix each item
-        if isinstance(texts, list):
-            texts = [
-                f"Represent this sentence for searching relevant passages: {text}"
-                for text in texts
-            ]
-        else:
-            texts = f"Represent this sentence for searching relevant passages: {texts}"
+    logger.debug(f"[embedding] Generating embeddings for {len(texts)} text(s)")
 
-    # The .encode() method handles batching automatically for lists
-    return model.encode(texts, convert_to_tensor=False)
+    inputs = tokenizer(
+        texts,
+        max_length=512,
+        padding=True,
+        truncation=True,
+        return_tensors="pt",
+    )
+
+    outputs = model(
+        input_ids=inputs["input_ids"],
+        attention_mask=inputs["attention_mask"],
+    )
+
+    embeddings = _mean_pool(outputs.last_hidden_state, inputs["attention_mask"])
+    return embeddings[0] if single else embeddings

@@ -37,13 +37,10 @@ dependencies = [
 [project.optional-dependencies]
 
 local_llm = [
-    "torch",                  # CPU build by default; see README for CUDA install
+    "onnxruntime",            # CPU-only ONNX Runtime; no CUDA required
+    "optimum[onnxruntime]",   # HuggingFace Optimum with ONNX export + ORT backend
     "transformers",
-    "accelerate",
-    "bitsandbytes",
-    "sentence-transformers",
-    "datasets",
-    "einops",
+    "tokenizers",
 ]
 
 openai = [
