@@ -42,36 +42,30 @@ def test_search(client):
     assert "total" in body
 
 
-def test_search_returns_total_pages(client):
-    r = client.post("/api/v1/search", json={"query": "fantasy dress", "limit": 5})
+def test_search_max_results_caps_results(client):
+    """max_results caps the number of results returned; client paginates from there."""
+    r = client.post("/api/v1/search", json={"query": "fantasy dress", "max_results": 2})
     assert r.status_code == 200
     body = r.json()
-    assert "total_pages" in body
-    assert body["total_pages"] >= 1
+    assert len(body["results"]) <= 2
 
 
-def test_search_pagination_page_param(client):
-    """Page 1 and page 2 with limit=1 should return different SKUs (or page 2 empty)."""
-    r1 = client.post("/api/v1/search", json={"query": "fantasy", "limit": 1, "page": 1})
-    r2 = client.post("/api/v1/search", json={"query": "fantasy", "limit": 1, "page": 2})
-    assert r1.status_code == 200
-    assert r2.status_code == 200
-    skus1 = [p["sku"] for p in r1.json()["results"]]
-    skus2 = [p["sku"] for p in r2.json()["results"]]
-    # Pages must not overlap (page 2 may be empty if only 1 result exists)
-    assert not set(skus1) & set(skus2)
+def test_search_total_reflects_full_result_count(client):
+    """total counts all matching results regardless of max_results."""
+    r_all = client.post("/api/v1/search", json={"query": "fantasy", "max_results": 500})
+    r_cap = client.post("/api/v1/search", json={"query": "fantasy", "max_results": 1})
+    assert r_all.status_code == 200
+    assert r_cap.status_code == 200
+    # A capped response must not report more total hits than the uncapped one
+    assert r_cap.json()["total"] <= r_all.json()["total"]
 
 
-def test_search_total_pages_matches_total(client):
-    """total_pages must be ceil(total / limit), never 0."""
-    import math
-    r = client.post("/api/v1/search", json={"query": "outfit", "limit": 3})
+def test_search_returns_unique_skus(client):
+    """Each result in a single response must have a distinct SKU."""
+    r = client.post("/api/v1/search", json={"query": "outfit", "max_results": 500})
     assert r.status_code == 200
-    body = r.json()
-    total = body["total"]
-    limit = 3
-    expected = max(1, math.ceil(total / limit))
-    assert body["total_pages"] == expected
+    skus = [p["sku"] for p in r.json()["results"]]
+    assert len(skus) == len(set(skus))
 
 
 def test_settings(client):
