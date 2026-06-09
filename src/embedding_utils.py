@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 _HF_MODEL_ID = "BAAI/bge-large-en-v1.5"
 _env_model_dir = os.getenv("EMBEDDING_MODEL_DIR", "")
 _MODEL_DIR = Path(_env_model_dir) if _env_model_dir else (Path(__file__).parent.parent / "models" / "bge-large-en-v1.5")
+_INFERENCE_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
 
 _model = None
 _tokenizer = None
@@ -85,6 +86,9 @@ def _mean_pool(last_hidden_state, attention_mask) -> np.ndarray:
 def generate_embeddings(texts, is_query: bool = False) -> np.ndarray:
     """Tokenise, run ONNX inference, mean-pool, and L2-normalise.
 
+    Processes texts in sub-batches of EMBEDDING_BATCH_SIZE (default 32) to
+    keep peak memory reasonable on CPU.
+
     Returns float32 ndarray of shape (1024,) for a single string,
     or (N, 1024) for a list.
     """
@@ -96,18 +100,21 @@ def generate_embeddings(texts, is_query: bool = False) -> np.ndarray:
 
     logger.debug(f"[embedding] Generating embeddings for {len(texts)} text(s)")
 
-    inputs = tokenizer(
-        texts,
-        max_length=512,
-        padding=True,
-        truncation=True,
-        return_tensors="pt",
-    )
+    chunks = []
+    for start in range(0, len(texts), _INFERENCE_BATCH_SIZE):
+        batch = texts[start: start + _INFERENCE_BATCH_SIZE]
+        inputs = tokenizer(
+            batch,
+            max_length=512,
+            padding=True,
+            truncation=True,
+            return_tensors="pt",
+        )
+        outputs = model(
+            input_ids=inputs["input_ids"],
+            attention_mask=inputs["attention_mask"],
+        )
+        chunks.append(_mean_pool(outputs.last_hidden_state, inputs["attention_mask"]))
 
-    outputs = model(
-        input_ids=inputs["input_ids"],
-        attention_mask=inputs["attention_mask"],
-    )
-
-    embeddings = _mean_pool(outputs.last_hidden_state, inputs["attention_mask"])
+    embeddings = np.concatenate(chunks, axis=0)
     return embeddings[0] if single else embeddings
