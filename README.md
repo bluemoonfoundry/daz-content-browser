@@ -38,8 +38,7 @@ Requires Python 3.11+ installed. No other setup.
    ```bash
    python install.py
    ```
-3. The installer will ask whether you want CPU-only or CUDA PyTorch. Choose CPU if you are unsure — you can switch later by re-running `install.py`. For CUDA version guidance consult [pytorch.org/get-started/locally](https://pytorch.org/get-started/locally/).
-4. Once installation finishes, start the server:
+3. Once installation finishes, start the server:
    ```bash
    run.bat          # Windows
    ./run.sh         # Mac / Linux
@@ -58,8 +57,6 @@ Requires Python 3.11+ installed. No other setup.
 
    Interactive API docs are always available at `http://localhost:8000/docs`
 
-> **To switch between CPU and GPU later**, just re-run `python install.py` — it will ask again and reinstall the correct torch build.
-
 ### Option B — pip install
 
 ```bash
@@ -68,13 +65,13 @@ pip install torch --index-url https://download.pytorch.org/whl/cpu
 vab server
 ```
 
-The `vab` command is added to your PATH by pip. Replace the torch index URL with your CUDA version if needed (see [pytorch.org/get-started/locally](https://pytorch.org/get-started/locally/)).
+The `vab` command is added to your PATH by pip.
 
 ### Option C — Standalone executable (no Python required)
 
 Download `vab-windows.zip`, unzip it, and run `vab\vab.exe server`. No Python installation needed.
 
-> The standalone executable is large (~2–3 GB) because PyTorch is bundled inside it. Options A and B are faster to download.
+> The standalone executable bundles ONNX Runtime and all dependencies. Options A and B are faster to download.
 
 ---
 
@@ -117,7 +114,8 @@ cp .env.example .env
 | `DAZ_STUDIO_EXE_PATH` | Full path to `DAZStudio.exe` |
 | `DB_HOST` / `DB_PORT` | DAZ CMS PostgreSQL host and port (defaults: `127.0.0.1` / `17237`) |
 | `DB_NAME` / `DB_USER` / `DB_PASS` | DAZ CMS credentials |
-| `EMBEDDING_DEVICE` | `cpu` (default) or `cuda` for GPU acceleration |
+| `EMBEDDING_MODEL_DIR` | Local cache path for the ONNX model (default: `models/bge-large-en-v1.5/`) |
+| `EMBEDDING_BATCH_SIZE` | Texts per ONNX inference call (default: `32`; lower = less memory) |
 
 The DAZ CMS database is installed and managed by DAZ Studio — you do not need to set it up. Run DAZ Studio at least once before indexing.
 
@@ -283,7 +281,7 @@ Semantic search with optional filters. Primary search endpoint for the UI.
     "compatible_figures": "Genesis 9",
     "is_installed": true
   },
-  "limit": 25,
+  "max_results": 500,
   "min_relevance": 0.0
 }
 
@@ -296,7 +294,7 @@ Semantic search with optional filters. Primary search endpoint for the UI.
 }
 ```
 
-All filter fields are optional. `min_relevance` filters out results below a score threshold (0.0 = no filtering).
+All filter fields are optional. `max_results` caps how many results the server returns (default 500); pagination is handled client-side. `min_relevance` filters out results below a score threshold (0.0 = no filtering).
 
 #### `POST /api/v1/query`
 
@@ -357,8 +355,8 @@ Saves settings to `settings.json`. Only fields included in the request body are 
   "cms_user": "dzcms",
   "cms_password": "secret",
   "cms_schema": "dzcontent",
-  "embedding_model": "mixedbread-ai/mxbai-embed-large-v1",
-  "query_model": "mixedbread-ai/mxbai-embed-large-v1",
+  "embedding_model": "BAAI/bge-large-en-v1.5",
+  "query_model": "BAAI/bge-large-en-v1.5",
   "daz_script_server_url": "http://localhost:18811",
   "daz_script_server_enabled": true
 }
@@ -515,21 +513,6 @@ python vab.py openproduct --product "dForce Night Runner Outfit"
 
 ---
 
-## Switching to GPU (CUDA)
-
-CPU-only PyTorch is installed by default. To switch to a CUDA build for faster indexing:
-
-```bash
-# Replace cu121 with your CUDA version (cu118, cu121, cu124, etc.)
-pip install torch --index-url https://download.pytorch.org/whl/cu121
-```
-
-Also set `EMBEDDING_DEVICE=cuda` in your `.env` file.
-
-Find your CUDA version in the NVIDIA Control Panel under Help → System Information.
-
----
-
 ## Developer guide
 
 ### Prerequisites
@@ -543,8 +526,7 @@ Find your CUDA version in the NVIDIA Control Panel under Help → System Informa
 ```bash
 git clone https://github.com/bluemoonfoundry/daz-content-browser.git
 cd daz-content-browser
-make install            # Python deps + UI node modules
-make install-torch-cpu  # CPU PyTorch (or install CUDA version manually)
+make install            # Python deps + UI node modules (includes CPU-only torch)
 make build              # build UI into ui/dist/
 ```
 
@@ -563,8 +545,7 @@ For development, you can run:
 
 | Target | Description |
 |---|---|
-| `install` | Install Python deps and UI node modules |
-| `install-torch-cpu` | Install CPU-only PyTorch |
+| `install` | Install Python deps (including CPU-only PyTorch) and UI node modules |
 | `build` | Build the UI into `ui/dist/` |
 | `dev-server` | Run the API server at `:8000` |
 | `demo-server` | Run the server in demo mode |
@@ -584,7 +565,7 @@ make build           # required first — populates ui/dist/
 
 make release-zip     # → dist/vab-release.zip
 make release-wheel   # → dist/visual_asset_browser-*.whl
-make release-exe     # → dist/vab/vab.exe  (~2-3 GB)
+make release-exe     # → dist/vab/vab.exe
 
 # Publish to GitHub Releases
 make gh-release VERSION=v1.0.0 TITLE="Initial Release" NOTES="First public release"
