@@ -28,7 +28,10 @@ hiddenimports = [
     'pydantic.v1',
 ]
 
-for pkg in ('chromadb', 'transformers', 'onnxruntime', 'optimum'):
+# transformers and optimum are only needed for the one-time ONNX export
+# (export_model.py), never at server runtime. Excluding them removes ~2.8 GB
+# of torch + transformers from the bundle.
+for pkg in ('chromadb', 'onnxruntime', 'tokenizers'):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b
@@ -45,7 +48,13 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        'torch', 'torchvision', 'torchaudio',
+        'transformers', 'optimum',
+        'bitsandbytes',
+        'datasets', 'hf_xet',
+        'tensorflow', 'jax',
+    ],
     noarchive=False,
 )
 

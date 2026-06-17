@@ -12,7 +12,7 @@ UPDATE  ?=
 
 .PHONY: install install-torch-cpu build dev-server demo-server dev-ui \
         open-server open-demo-server \
-        release-zip release-wheel release-exe gh-release test clean sync-ui help
+        release-zip release-wheel release-exe export-model release-dim gh-release test clean sync-ui help
 
 help:                ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*##"}; {printf "  %-16s %s\n", $$1, $$2}'
@@ -61,6 +61,13 @@ release-wheel:       ## Build pip-installable wheel (run 'make build' first)
 
 release-exe:         ## Build standalone Windows executable via PyInstaller (run 'make build' first)
 	$(PYINSTALLER) vab.spec --distpath $(DIST) -y
+
+export-model:        ## Export ONNX embedding model to models/ for DIM bundling
+	$(PYTHON) export_model.py
+
+release-dim:         ## Build DAZ Install Manager package zip (VERSION=1.0.0 required)
+	@test -n "$(VERSION)" || { echo "ERROR: VERSION is required.  make release-dim VERSION=1.0.0"; exit 1; }
+	$(PYTHON) build_dim.py --version $(VERSION)
 
 gh-release:          ## Publish dist/ to a GitHub release (VERSION=v1.0.0 [TITLE="..."] [NOTES="..."] [UPDATE=1])
 	@test -n "$(VERSION)" || { echo "ERROR: VERSION is required.  make gh-release VERSION=v1.0.0"; exit 1; }
