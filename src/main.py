@@ -112,6 +112,9 @@ def server_command(args):
     else:
         print("--- Starting server in Production Mode ---")
         os.environ["APP_MODE"] = "production"
+    if args.model:
+        os.environ["EMBEDDING_MODEL_ID"] = args.model
+        print(f"--- Embedding model: {args.model} ---")
     uvicorn.run("server:app", host=args.host, port=args.port, reload=args.demo)
 
 def main():
@@ -175,6 +178,11 @@ def main():
     parsers["server"].add_argument("--port", type=int, default=8000)
     parsers["server"].add_argument(
         "--demo", action="store_true", help="Run server in demo mode."
+    )
+    parsers["server"].add_argument(
+        "--model", default="", metavar="MODEL_ID",
+        help="HuggingFace model ID for embeddings (e.g. BAAI/bge-m3). "
+             "Defaults to BAAI/bge-large-en-v1.5.",
     )
 
     parsers["load"].add_argument('--force', action='store_true', help="Force a complete rebuild of the SQLite database (implies --all).")

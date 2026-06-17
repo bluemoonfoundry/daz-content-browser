@@ -8,9 +8,10 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-_HF_MODEL_ID = "BAAI/bge-large-en-v1.5"
+_HF_MODEL_ID = os.getenv("EMBEDDING_MODEL_ID", "BAAI/bge-large-en-v1.5")
+_model_slug  = _HF_MODEL_ID.split("/")[-1]   # e.g. "bge-large-en-v1.5"
 _env_model_dir = os.getenv("EMBEDDING_MODEL_DIR", "")
-_MODEL_DIR = Path(_env_model_dir) if _env_model_dir else (Path(__file__).parent.parent / "models" / "bge-large-en-v1.5")
+_MODEL_DIR = Path(_env_model_dir) if _env_model_dir else (Path(__file__).parent.parent / "models" / _model_slug)
 _INFERENCE_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
 
 _session = None
