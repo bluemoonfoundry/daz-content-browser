@@ -3,6 +3,7 @@ import logging
 import os
 import argparse
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from utilities import fetch_json_from_url, fetch_html_content, async_fetch_json_from_url, async_fetch_html_content
@@ -386,7 +387,10 @@ def main(args, on_progress=None):
         logger.info(f"Phase 1: Starting ETL for {len(skus_to_process)} products.")
         products_to_process_data = daz_pg_analyzer.get_products_by_sku_list(skus_to_process)
 
-        figures_path = Path(__file__).parent.parent.parent / '.figures.json'
+        if getattr(sys, 'frozen', False):
+            figures_path = Path(sys._MEIPASS) / '.figures.json'
+        else:
+            figures_path = Path(__file__).parent.parent.parent / '.figures.json'
         try:
             with open(figures_path, 'r') as f:
                 figure_names = json.load(f)

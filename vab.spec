@@ -12,6 +12,7 @@ from PyInstaller.utils.hooks import collect_all, collect_data_files
 datas = [
     ('ui/dist', 'ui_dist'),  # pre-built UI; served by FastAPI at runtime
     ('src', '.'),            # Python source modules on sys.path via pathex
+    ('.figures.json', '.'),  # static figure-name reference data for ETL
 ]
 binaries = []
 hiddenimports = [
