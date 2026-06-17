@@ -225,8 +225,7 @@ def main():
     shutil.rmtree(staging, ignore_errors=True)
     staging.mkdir()
 
-    plat_suffix = "win64" if plat == "windows" else "macos"
-    out_zip = out_dir / f"BMFContentBrowser-{version}-{plat_suffix}.zip"
+    out_zip = out_dir / "IM00999101-01_BmfDazContentNLBrowser.zip"
 
     print(f"Building DIM package  version={version}  platform={plat}")
     print(f"  plugin:  {plugin_dll}")
