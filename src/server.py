@@ -107,10 +107,10 @@ def _format_product(row: dict) -> dict:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if APP_MODE != "demo" and daz_pg_analyzer is None:
-        raise RuntimeError(
-            "Server is in production mode but PostgreSQL credentials are missing. "
-            "Set DB_NAME, DB_USER, DB_PASS, DB_HOST, DB_PORT in your .env file, "
-            "or start the server with --demo."
+        logger.warning(
+            "PostgreSQL credentials not configured — content-roots and asset-file endpoints "
+            "will be unavailable. Set DB_NAME, DB_USER, DB_PASS, DB_HOST, DB_PORT in your "
+            ".env file, or start the server with --demo, to enable them."
         )
     if APP_MODE == "demo":
         logger.info("Server running in DEMO mode — PostgreSQL not required.")
@@ -560,7 +560,7 @@ def load_asset_into_scene(body: LoadAssetRequest):
 
 @app.get("/api/v1/content-roots")
 def get_content_roots():
-    if APP_MODE == "demo":
+    if APP_MODE == "demo" or daz_pg_analyzer is None:
         return {"content_roots": []}
     roots = daz_pg_analyzer.get_content_roots()
     return {"content_roots": roots}
@@ -569,7 +569,7 @@ def get_content_roots():
 @app.get("/api/v1/assets/{sku}")
 def get_assets(sku: str):
     """Asset file paths for a SKU, with resolved absolute paths where available."""
-    if APP_MODE == "demo":
+    if APP_MODE == "demo" or daz_pg_analyzer is None:
         return {"sku": sku, "files": []}
 
     files = daz_pg_analyzer.get_asset_files_by_sku(sku)
@@ -623,7 +623,7 @@ def get_info():
 
     filter_values = sqlite_db.get_filter_values()
     last_update = sqlite_db.get_last_updated()
-    postgres_count = daz_pg_analyzer.count_skus()
+    postgres_count = daz_pg_analyzer.count_skus() if daz_pg_analyzer else -1
     sqlite_count = sqlite_db.count()
 
     logger.info(

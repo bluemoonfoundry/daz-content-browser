@@ -26,6 +26,15 @@ hiddenimports = [
     'uvicorn.lifespan.off',
     # pydantic v1 shim used internally by several packages
     'pydantic.v1',
+    # fastapi/starlette submodules not auto-detected by PyInstaller
+    'fastapi.staticfiles',
+    'starlette.staticfiles',
+    'starlette.middleware.cors',
+    'starlette.responses',
+    # aiofiles is required by starlette StaticFiles for async file serving
+    'aiofiles',
+    'aiofiles.os',
+    'aiofiles.threadpool',
 ]
 
 # transformers and optimum are only needed for the one-time ONNX export
