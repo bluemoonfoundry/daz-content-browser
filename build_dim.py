@@ -122,7 +122,7 @@ def stage_files(staging: Path, plugin_dll: Path, server_dir: Path, model_dir: Pa
     def copy_tree(src: Path, rel_dest_prefix: str):
         for item in src.rglob("*"):
             if item.is_file():
-                rel = item.relative_to(src)
+                rel = item.relative_to(src).as_posix()
                 copy_file(item, f"{rel_dest_prefix}/{rel}")
 
     # Plugin DLL
@@ -183,7 +183,7 @@ def zip_staging(staging: Path, out_path: Path):
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
         for item in sorted(staging.rglob("*")):
             if item.is_file():
-                zf.write(item, item.relative_to(staging))
+                zf.write(item, item.relative_to(staging).as_posix())
     size_mb = out_path.stat().st_size / 1_048_576
     print(f"\nCreated {out_path} ({size_mb:.1f} MB)")
 
