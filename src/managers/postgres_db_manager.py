@@ -193,7 +193,7 @@ def generate_embedding_text(product_data, web_data) -> str:
     # Join all the parts into a single, cohesive paragraph.
     return " ".join(parts)
 
-def generate_and_store_embeddings(processed_skus, on_progress=None):
+def generate_and_store_embeddings(processed_skus, on_progress=None, cancel_check=None):
     """Fetches processed data from SQLite, generates embeddings, and stores them in ChromaDB in safe-sized batches to avoid database parameter limits.
 
     Args:
@@ -215,6 +215,9 @@ def generate_and_store_embeddings(processed_skus, on_progress=None):
 
     # Loop through the list of SKUs in chunks of BATCH_SIZE
     for i in range(0, total, BATCH_SIZE):
+        if cancel_check and cancel_check():
+            logger.info("Embedding cancelled by user request.")
+            return
         # Get the current batch of SKUs
         sku_batch = processed_skus[i:i + BATCH_SIZE]
 
@@ -342,7 +345,7 @@ def determine_compatibility(product_data: dict, figure_names: list) -> dict:
         'tags_to_append': compat_str or '' # Always use the original string for tags
     }
 
-def main(args, on_progress=None):
+def main(args, on_progress=None, cancel_check=None):
     """Main ETL and Embedding pipeline with command-line arguments.
 
     Args:
@@ -467,7 +470,11 @@ def main(args, on_progress=None):
         if failed_skus:
             logger.warning(f"ETL phase: {len(failed_skus)} product(s) failed: {failed_skus}")
         logger.info(f"ETL phase complete. {len(successfully_processed_skus)} succeeded, {len(failed_skus)} failed.")
-    
+
+    if cancel_check and cancel_check():
+        logger.info("Index cancelled after ETL phase.")
+        return
+
     if args.phase == 'embed' or args.phase == 'all':
 
         if args.force or args.all:
@@ -503,7 +510,7 @@ def main(args, on_progress=None):
             skus_to_embed = skus_to_embed[:args.limit]
 
         logger.info(f"Phase 2: Starting embedding generation for {len(skus_to_embed)} products.")
-        generate_and_store_embeddings(skus_to_embed, on_progress=on_progress)
+        generate_and_store_embeddings(skus_to_embed, on_progress=on_progress, cancel_check=cancel_check)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="ETL and Embedding process for Daz Content.")

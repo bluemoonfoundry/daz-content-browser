@@ -12,14 +12,7 @@ TASK_ERROR    = -1
 
 
 def run_update_flow(task_status: dict, force: bool = False):
-    """Runs the full update flow for DAZ product data.
-
-    Loads new data from PostgreSQL, updates SQLite, and generates embeddings.
-
-    Args:
-        task_status (dict): Shared dict for tracking task progress. Updated in-place.
-        force (bool): If True, rebuild the ChromaDB collection from scratch.
-    """
+    """Runs the full update flow for DAZ product data."""
     args = argparse.Namespace(force=force, all=False, phase='all', limit=None)
 
     def on_progress(stage: str, current: int, total: int, detail: str = ""):
@@ -28,6 +21,9 @@ def run_update_flow(task_status: dict, force: bool = False):
         task_status["stage"] = stage
         task_status["progress"] = f"{label}: {current}/{total} ({pct}%)" + (f" — {detail}" if detail else "")
 
+    def cancel_check() -> bool:
+        return bool(task_status.get("cancel_requested"))
+
     try:
         task_status.update({
             "task_status": TASK_RUNNING,
@@ -35,13 +31,20 @@ def run_update_flow(task_status: dict, force: bool = False):
             "progress": "Starting data upload...",
         })
 
-        run_daz_load(args, on_progress=on_progress)
+        run_daz_load(args, on_progress=on_progress, cancel_check=cancel_check)
 
-        task_status.update({
-            "task_status": TASK_FINISHED,
-            "stage": "finished",
-            "progress": "Update process finished successfully.",
-        })
+        if cancel_check():
+            task_status.update({
+                "task_status": TASK_FINISHED,
+                "stage": "cancelled",
+                "progress": "Indexing cancelled.",
+            })
+        else:
+            task_status.update({
+                "task_status": TASK_FINISHED,
+                "stage": "finished",
+                "progress": "Update process finished successfully.",
+            })
     except Exception as e:
         logger.exception("Background update task failed.")
         task_status.update({

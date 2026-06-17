@@ -261,6 +261,7 @@ def start_update(body: UpdateRequest = UpdateRequest(), background_tasks: Backgr
         "progress": "Starting…",
         "stage": "start",
         "error": None,
+        "cancel_requested": False,
         "last_run": datetime.now(timezone.utc).isoformat(),
     })
 
@@ -280,6 +281,15 @@ def start_update(body: UpdateRequest = UpdateRequest(), background_tasks: Backgr
 
     background_tasks.add_task(wrapped_run)
     return {"message": "Update process started.", "task_id": task_id}
+
+
+@app.delete("/api/v1/update")
+def cancel_update():
+    """Signal a running index operation to stop at the next checkpoint."""
+    if not _current_task.get("running"):
+        return {"message": "No update is running."}
+    _current_task["cancel_requested"] = True
+    return {"message": "Cancel requested."}
 
 
 # ── Browse products ────────────────────────────────────────────────────────────
