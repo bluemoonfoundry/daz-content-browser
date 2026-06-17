@@ -135,31 +135,22 @@ def stage_files(staging: Path, plugin_dll: Path, server_dir: Path, model_dir: Pa
     return staged_paths
 
 
-def write_manifest(staging: Path, staged_paths: list[str], version: str, plat: str):
-    content_list = "\n".join(
-        f'    <Content VALUE="{p}"/>' for p in sorted(staged_paths)
-    )
-    plat_tag = "WIN64" if plat == "windows" else "MAC64"
+def write_manifest(staging: Path, staged_paths: list[str], plat: str):
+    # PLATFORM values per DIM spec: "PC" (Windows) or "Mac" (macOS)
+    plat_tag = "PC" if plat == "windows" else "Mac"
     # Use a stable UUID derived from product name so re-builds produce the same GlobalID
     global_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"bluemoonfoundry.{PRODUCT}"))
 
+    file_entries = "\n".join(
+        f'  <File TARGET="{p}" ACTION="Install" PLATFORM="{plat_tag}" BITARCH="64"/>'
+        for p in sorted(staged_paths)
+    )
+
     manifest = dedent(f"""\
-        <DAZInstallPackage TARGET_SCHEMA="0.1">
-          <ProductName VALUE="BMF Content Browser"/>
-          <ProductStoreID VALUE=""/>
-          <ProductToken VALUE=""/>
+        <DAZInstallManifest VERSION="0.1">
           <GlobalID VALUE="{global_id}"/>
-          <InstallTypes VALUE="Application"/>
-          <MandatoryInstallTypes VALUE=""/>
-          <Version VALUE="{version}"/>
-          <FileVersion VALUE="{version}"/>
-          <InstallationInfo>
-            <Platform VALUE="{plat_tag}"/>
-          </InstallationInfo>
-          <ContentList>
-        {content_list}
-          </ContentList>
-        </DAZInstallPackage>
+        {file_entries}
+        </DAZInstallManifest>
     """)
 
     manifest_path = staging / "Manifest.dsx"
@@ -167,14 +158,14 @@ def write_manifest(staging: Path, staged_paths: list[str], version: str, plat: s
     print(f"  [manifest] Manifest.dsx ({len(staged_paths)} entries)")
 
 
-def write_supplement(staging: Path, version: str):
+def write_supplement(staging: Path):
+    # ProductStoreIDX format: {SKU}-{PackageID}
     supplement = dedent(f"""\
         <ProductSupplement VERSION="0.1">
           <ProductName VALUE="BMF Content Browser"/>
-          <ProductDescription VALUE="Semantic search and browser plugin for DAZ Studio content libraries."/>
-          <ProductVersion VALUE="{version}"/>
-          <ProductPublisher VALUE="Blue Moon Foundry"/>
+          <ProductStoreIDX VALUE="999101-1"/>
           <InstallTypes VALUE="Application"/>
+          <ProductTags VALUE="DAZStudio4_5"/>
         </ProductSupplement>
     """)
     (staging / "Supplement.dsx").write_text(supplement, encoding="utf-8")
@@ -234,8 +225,8 @@ def main():
     print()
 
     staged = stage_files(staging, plugin_dll, server_dir, model_dir)
-    write_manifest(staging, staged, version, plat)
-    write_supplement(staging, version)
+    write_manifest(staging, staged, plat)
+    write_supplement(staging)
     zip_staging(staging, out_zip)
     shutil.rmtree(staging)
 
