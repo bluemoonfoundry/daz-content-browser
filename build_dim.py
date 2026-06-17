@@ -50,9 +50,14 @@ PRODUCT = "ContentBrowser"
 PLUGIN_NAME = "BmfContentBrowser"
 MODEL_NAME = "bge-large-en-v1.5"
 
-# DIM zip root maps directly to the DAZ Studio application directory.
-# plugins/ and resources/ are siblings in that directory; DAZ only scans
-# plugins/ for plugin DLLs — resources/ is never plugin-scanned.
+# DIM install-target directory name and version compatibility string.
+# All content files are nested under this directory inside the zip; Manifest.dsx
+# and Supplement.dsx sit at the zip root.  The version string matches DAZ Studio 4.5+.
+DIM_APP_DIR = "DAZ Studio_4.5;4.x Public Build;4.x Publishing Build_(64-Bit)"
+DIM_VERSION = "4.5;4.x Public Build;4.x Publishing Build"
+
+# Destination paths relative to the DAZ Studio application directory.
+# plugins/ and resources/ are siblings; DAZ only scans plugins/ for plugin DLLs.
 PLUGIN_DEST = f"plugins/{PLUGIN_NAME}"
 SERVER_DEST = f"resources/{VENDOR}/{PRODUCT}/server"
 MODEL_DEST = f"resources/{VENDOR}/{PRODUCT}/models/{MODEL_NAME}"
@@ -99,14 +104,20 @@ def find_plugin_dll(plat: str, override: str | None) -> Path:
 
 
 def stage_files(staging: Path, plugin_dll: Path, server_dir: Path, model_dir: Path) -> list[str]:
-    """Copy all files into staging/ and return a list of relative paths (for the manifest)."""
+    """Copy all files into staging/ and return a list of zip-relative paths (for the manifest).
+
+    Content is nested under DIM_APP_DIR inside the zip; Manifest.dsx and Supplement.dsx
+    are written directly to staging/ (zip root) by their own functions.
+    """
     staged_paths: list[str] = []
 
     def copy_file(src: Path, rel_dest: str):
-        dst = staging / rel_dest
+        # rel_dest is relative to the DAZ Studio application directory
+        zip_path = f"{DIM_APP_DIR}/{rel_dest}"
+        dst = staging / zip_path
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
-        staged_paths.append(rel_dest)
+        staged_paths.append(zip_path)
 
     def copy_tree(src: Path, rel_dest_prefix: str):
         for item in src.rglob("*"):
@@ -141,20 +152,17 @@ def write_manifest(staging: Path, staged_paths: list[str], plat: str):
     # Use a stable UUID derived from product name so re-builds produce the same GlobalID
     global_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"bluemoonfoundry.{PRODUCT}"))
 
-    file_entries = "\n".join(
-        f'  <File TARGET="{p}" ACTION="Install" PLATFORM="{plat_tag}" BITARCH="64"/>'
-        for p in sorted(staged_paths)
-    )
-
-    manifest = dedent(f"""\
-        <DAZInstallManifest VERSION="0.1">
-          <GlobalID VALUE="{global_id}"/>
-        {file_entries}
-        </DAZInstallManifest>
-    """)
+    lines = ['<DAZInstallManifest VERSION="0.1">']
+    lines.append(f' <GlobalID VALUE="{global_id}"/>')
+    for p in sorted(staged_paths):
+        lines.append(
+            f' <File TARGET="Application" VERSION="{DIM_VERSION}" PLATFORM="{plat_tag}"'
+            f' ACTION="Install" BITARCH="64" TYPE="DAZ Studio" VALUE="{p}"/>'
+        )
+    lines.append("</DAZInstallManifest>")
 
     manifest_path = staging / "Manifest.dsx"
-    manifest_path.write_text(manifest, encoding="utf-8")
+    manifest_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"  [manifest] Manifest.dsx ({len(staged_paths)} entries)")
 
 
