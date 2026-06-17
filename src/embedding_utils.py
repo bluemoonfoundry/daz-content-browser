@@ -45,10 +45,9 @@ def _load_from_cache():
 
     logger.info(f"[embedding] Loading ONNX model from {_MODEL_DIR}")
 
-    session = ort.InferenceSession(
-        str(_MODEL_DIR / "model.onnx"),
-        providers=["DmlExecutionProvider", "CPUExecutionProvider"],
-    )
+    available = ort.get_available_providers()
+    providers = [p for p in ["DmlExecutionProvider", "CPUExecutionProvider"] if p in available]
+    session = ort.InferenceSession(str(_MODEL_DIR / "model.onnx"), providers=providers)
 
     tokenizer = Tokenizer.from_file(str(_MODEL_DIR / "tokenizer.json"))
     tokenizer.enable_truncation(max_length=512)
