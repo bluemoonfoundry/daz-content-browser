@@ -228,12 +228,9 @@ def main():
     server_dir = Path(args.server_dir) if args.server_dir else ROOT / "dist" / "vab"
     model_dir = Path(args.model_dir) if args.model_dir else ROOT / "models" / MODEL_NAME
 
-    # Export tool is optional: include it if it was built, skip it otherwise.
-    if args.export_tool_dir:
-        export_tool_dir: Path | None = Path(args.export_tool_dir)
-    else:
-        default_export = ROOT / "dist" / "vab_export"
-        export_tool_dir = default_export if default_export.exists() else None
+    # Export tool must be explicitly requested — it is ~3 GB and is distributed
+    # as a separate package, not bundled into the main DIM zip by default.
+    export_tool_dir: Path | None = Path(args.export_tool_dir) if args.export_tool_dir else None
 
     plugin_dll = find_plugin_dll(plat, args.plugin_dll)
 
