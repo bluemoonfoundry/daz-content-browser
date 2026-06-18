@@ -5,33 +5,38 @@ The package bundles:
   - The plugin DLL (from the bmf-daz-content-browser-plugin build)
   - The PyInstaller server bundle (dist/vab/)
   - The pre-exported ONNX model (models/bge-large-en-v1.5/)
+  - Optionally: the model export tool (dist/vab_export/) for in-plugin model switching
 
 Install layout inside the DIM zip (zip root = DAZ Studio application directory):
   plugins/BmfContentBrowser/BmfContentBrowser.dll
-  resources/BlueMoonFoundry/ContentBrowser/server/vab/   (PyInstaller bundle)
+  resources/BlueMoonFoundry/ContentBrowser/server/vab/         (server bundle)
+  resources/BlueMoonFoundry/ContentBrowser/server/vab_export/  (export tool, if included)
   resources/BlueMoonFoundry/ContentBrowser/models/bge-large-en-v1.5/
 
 DIM installs everything relative to the application directory (InstallTypes=Application).
 resources/ is a sibling of plugins/ and is never scanned for plugin DLLs.
 The plugin locates the server via QCoreApplication::applicationDirPath() +
 "resources/BlueMoonFoundry/ContentBrowser/server/vab/vab.exe".
+The export tool is located at the same base path with "vab_export/vab_export.exe".
 
 Usage:
     python build_dim.py [options]
 
 Options:
-    --plugin-dll PATH   Path to BmfContentBrowser.dll (Windows) or .dylib (macOS)
-    --server-dir PATH   Path to PyInstaller output directory (default: dist/vab)
-    --model-dir PATH    Path to exported ONNX model directory (default: models/bge-large-en-v1.5)
-    --version VERSION   Package version string (default: 1.0.0)
-    --out-dir PATH      Output directory (default: dist)
-    --platform PLATFORM windows or macos (default: auto-detect)
+    --plugin-dll PATH      Path to BmfContentBrowser.dll (Windows) or .dylib (macOS)
+    --server-dir PATH      Path to PyInstaller output directory (default: dist/vab)
+    --export-tool-dir PATH Path to export tool directory (default: dist/vab_export, optional)
+    --model-dir PATH       Path to exported ONNX model directory (default: models/bge-large-en-v1.5)
+    --version VERSION      Package version string (default: 1.0.0)
+    --out-dir PATH         Output directory (default: dist)
+    --platform PLATFORM    windows or macos (default: auto-detect)
 
 Makefile: make release-dim
 Prereqs:
-    make release-exe        (builds dist/vab/)
-    python export_model.py  (exports ONNX model to models/bge-large-en-v1.5/)
-    cmake --build ...       (builds BmfContentBrowser.dll from plugin repo)
+    make release-exe           (builds dist/vab/)
+    make release-export-exe    (builds dist/vab_export/, optional but recommended)
+    python export_model.py     (exports ONNX model to models/bge-large-en-v1.5/)
+    cmake --build ...          (builds BmfContentBrowser.dll from plugin repo)
 """
 import argparse
 import platform
@@ -103,7 +108,13 @@ def find_plugin_dll(plat: str, override: str | None) -> Path:
     )
 
 
-def stage_files(staging: Path, plugin_dll: Path, server_dir: Path, model_dir: Path) -> list[str]:
+def stage_files(
+    staging: Path,
+    plugin_dll: Path,
+    server_dir: Path,
+    model_dir: Path,
+    export_tool_dir: Path | None,
+) -> list[str]:
     """Copy all files into staging/ and return a list of zip-relative paths (for the manifest).
 
     Content is nested under DIM_APP_DIR inside the zip; Manifest.dsx and Supplement.dsx
@@ -136,6 +147,16 @@ def stage_files(staging: Path, plugin_dll: Path, server_dir: Path, model_dir: Pa
     n_before = len(staged_paths)
     copy_tree(server_dir, server_dest_prefix)
     print(f"  [server] {server_dir.name}/ ({len(staged_paths) - n_before} files) -> {SERVER_DEST}/")
+
+    # Model export tool (optional — large bundle, includes torch/transformers)
+    if export_tool_dir is not None:
+        export_bundle_name = export_tool_dir.name  # typically "vab_export"
+        export_dest_prefix = f"{SERVER_DEST}/{export_bundle_name}"
+        n_before = len(staged_paths)
+        copy_tree(export_tool_dir, export_dest_prefix)
+        print(f"  [export] {export_tool_dir.name}/ ({len(staged_paths) - n_before} files) -> {SERVER_DEST}/")
+    else:
+        print("  [export] skipped (pass --export-tool-dir dist/vab_export to include)")
 
     # ONNX model directory
     model_dest_prefix = MODEL_DEST
@@ -192,6 +213,8 @@ def main():
     parser = argparse.ArgumentParser(description="Build BMF Content Browser DIM package")
     parser.add_argument("--plugin-dll", help="Path to BmfContentBrowser.dll / .dylib")
     parser.add_argument("--server-dir", help="PyInstaller output dir (default: dist/vab)")
+    parser.add_argument("--export-tool-dir",
+                        help="Export tool dir (default: dist/vab_export if it exists, else omitted)")
     parser.add_argument("--model-dir", help="ONNX model dir (default: models/bge-large-en-v1.5)")
     parser.add_argument("--version", default="1.0.0", help="Package version (default: 1.0.0)")
     parser.add_argument("--out-dir", help="Output directory (default: dist)")
@@ -204,6 +227,13 @@ def main():
 
     server_dir = Path(args.server_dir) if args.server_dir else ROOT / "dist" / "vab"
     model_dir = Path(args.model_dir) if args.model_dir else ROOT / "models" / MODEL_NAME
+
+    # Export tool is optional: include it if it was built, skip it otherwise.
+    if args.export_tool_dir:
+        export_tool_dir: Path | None = Path(args.export_tool_dir)
+    else:
+        default_export = ROOT / "dist" / "vab_export"
+        export_tool_dir = default_export if default_export.exists() else None
 
     plugin_dll = find_plugin_dll(plat, args.plugin_dll)
 
@@ -229,10 +259,11 @@ def main():
     print(f"Building DIM package  version={version}  platform={plat}")
     print(f"  plugin:  {plugin_dll}")
     print(f"  server:  {server_dir}")
+    print(f"  export:  {export_tool_dir or '(not included)'}")
     print(f"  model:   {model_dir}")
     print()
 
-    staged = stage_files(staging, plugin_dll, server_dir, model_dir)
+    staged = stage_files(staging, plugin_dll, server_dir, model_dir, export_tool_dir)
     write_manifest(staging, staged, plat)
     write_supplement(staging)
     zip_staging(staging, out_zip)

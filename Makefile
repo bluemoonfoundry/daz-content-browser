@@ -12,7 +12,7 @@ UPDATE  ?=
 
 .PHONY: install install-torch-cpu build dev-server demo-server dev-ui \
         open-server open-demo-server \
-        release-zip release-wheel release-exe export-model release-dim gh-release test clean sync-ui help
+        release-zip release-wheel release-exe release-export-exe export-model release-dim gh-release test clean sync-ui help
 
 help:                ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*##"}; {printf "  %-16s %s\n", $$1, $$2}'
@@ -61,6 +61,9 @@ release-wheel:       ## Build pip-installable wheel (run 'make build' first)
 
 release-exe:         ## Build standalone Windows executable via PyInstaller (run 'make build' first)
 	$(PYINSTALLER) vab.spec --distpath $(DIST) -y
+
+release-export-exe:  ## Build the model-export tool via PyInstaller (includes torch/transformers)
+	$(PYINSTALLER) vab_export.spec --distpath $(DIST) -y
 
 export-model:        ## Export ONNX embedding model to models/ for DIM bundling
 	$(PYTHON) export_model.py
