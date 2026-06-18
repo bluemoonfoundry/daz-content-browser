@@ -1,23 +1,27 @@
 #!/usr/bin/env python
 """Build a DAZ Install Manager (DIM) package for BMF Content Browser.
 
-The package bundles:
-  - The plugin DLL (from the bmf-daz-content-browser-plugin build)
-  - The PyInstaller server bundle (dist/vab/)
-  - The pre-exported ONNX model (models/bge-large-en-v1.5/)
-  - Optionally: the model export tool (dist/vab_export/) for in-plugin model switching
+Supports building multiple package variants by enabling/disabling components:
+
+Base package (~162 MB) — default:
+  - Plugin DLL
+  - PyInstaller server bundle (dist/vab/)
+
+Export-tool package (~2 GB) — pass --no-plugin --no-server --export-tool-dir dist/vab_export:
+  - Model export tool (dist/vab_export/)
+
+Model package — pass --include-model:
+  - Plugin DLL + server + pre-exported ONNX model
 
 Install layout inside the DIM zip (zip root = DAZ Studio application directory):
   plugins/BmfContentBrowser/BmfContentBrowser.dll
-  resources/BlueMoonFoundry/ContentBrowser/server/vab/         (server bundle)
-  resources/BlueMoonFoundry/ContentBrowser/server/vab_export/  (export tool, if included)
-  resources/BlueMoonFoundry/ContentBrowser/models/bge-large-en-v1.5/
+  resources/BlueMoonFoundry/ContentBrowser/server/vab/
+  resources/BlueMoonFoundry/ContentBrowser/server/vab_export/  (when included)
+  resources/BlueMoonFoundry/ContentBrowser/models/<model-name>/  (when included)
 
 DIM installs everything relative to the application directory (InstallTypes=Application).
-resources/ is a sibling of plugins/ and is never scanned for plugin DLLs.
 The plugin locates the server via QCoreApplication::applicationDirPath() +
 "resources/BlueMoonFoundry/ContentBrowser/server/vab/vab.exe".
-The export tool is located at the same base path with "vab_export/vab_export.exe".
 
 Usage:
     python build_dim.py [options]
@@ -25,18 +29,18 @@ Usage:
 Options:
     --plugin-dll PATH      Path to BmfContentBrowser.dll (Windows) or .dylib (macOS)
     --server-dir PATH      Path to PyInstaller output directory (default: dist/vab)
-    --export-tool-dir PATH Path to export tool directory (default: dist/vab_export, optional)
-    --model-dir PATH       Path to exported ONNX model directory (default: models/bge-large-en-v1.5)
+    --export-tool-dir PATH Path to export tool directory (optional, not included by default)
+    --include-model PATH   Include ONNX model dir in this package (default: omitted)
+    --no-plugin            Exclude the plugin DLL (for export-tool-only packages)
+    --no-server            Exclude the server bundle (for export-tool-only packages)
+    --product-id ID        Product store ID for Supplement.dsx (default: 999101-1)
+    --product-name NAME    Product name for Supplement.dsx (default: BMF Content Browser)
+    --out-file NAME        Output zip filename (default: auto-generated from product-id)
     --version VERSION      Package version string (default: 1.0.0)
     --out-dir PATH         Output directory (default: dist)
     --platform PLATFORM    windows or macos (default: auto-detect)
 
 Makefile: make release-dim
-Prereqs:
-    make release-exe           (builds dist/vab/)
-    make release-export-exe    (builds dist/vab_export/, optional but recommended)
-    python export_model.py     (exports ONNX model to models/bge-large-en-v1.5/)
-    cmake --build ...          (builds BmfContentBrowser.dll from plugin repo)
 """
 import argparse
 import platform
@@ -53,7 +57,6 @@ DIST = ROOT / "dist"
 VENDOR = "BlueMoonFoundry"
 PRODUCT = "ContentBrowser"
 PLUGIN_NAME = "BmfContentBrowser"
-MODEL_NAME = "bge-large-en-v1.5"
 
 # DIM install-target directory name and version compatibility string.
 # All content files are nested under this directory inside the zip; Manifest.dsx
@@ -65,7 +68,7 @@ DIM_VERSION = "4.5;4.x Public Build;4.x Publishing Build"
 # plugins/ and resources/ are siblings; DAZ only scans plugins/ for plugin DLLs.
 PLUGIN_DEST = f"plugins/{PLUGIN_NAME}"
 SERVER_DEST = f"resources/{VENDOR}/{PRODUCT}/server"
-MODEL_DEST = f"resources/{VENDOR}/{PRODUCT}/models/{MODEL_NAME}"
+MODELS_DEST = f"resources/{VENDOR}/{PRODUCT}/models"
 
 
 def detect_platform() -> str:
@@ -110,9 +113,9 @@ def find_plugin_dll(plat: str, override: str | None) -> Path:
 
 def stage_files(
     staging: Path,
-    plugin_dll: Path,
-    server_dir: Path,
-    model_dir: Path,
+    plugin_dll: Path | None,
+    server_dir: Path | None,
+    model_dir: Path | None,
     export_tool_dir: Path | None,
 ) -> list[str]:
     """Copy all files into staging/ and return a list of zip-relative paths (for the manifest).
@@ -136,17 +139,23 @@ def stage_files(
                 rel = item.relative_to(src).as_posix()
                 copy_file(item, f"{rel_dest_prefix}/{rel}")
 
-    # Plugin DLL
-    dll_dest = f"{PLUGIN_DEST}/{plugin_dll.name}"
-    copy_file(plugin_dll, dll_dest)
-    print(f"  [dll]    {plugin_dll.name} -> {PLUGIN_DEST}/")
+    # Plugin DLL (optional — omitted for export-tool-only packages)
+    if plugin_dll is not None:
+        dll_dest = f"{PLUGIN_DEST}/{plugin_dll.name}"
+        copy_file(plugin_dll, dll_dest)
+        print(f"  [dll]    {plugin_dll.name} -> {PLUGIN_DEST}/")
+    else:
+        print("  [dll]    skipped (--no-plugin)")
 
-    # PyInstaller server bundle (entire directory)
-    server_bundle_name = server_dir.name  # typically "vab"
-    server_dest_prefix = f"{SERVER_DEST}/{server_bundle_name}"
-    n_before = len(staged_paths)
-    copy_tree(server_dir, server_dest_prefix)
-    print(f"  [server] {server_dir.name}/ ({len(staged_paths) - n_before} files) -> {SERVER_DEST}/")
+    # PyInstaller server bundle (optional — omitted for export-tool-only packages)
+    if server_dir is not None:
+        server_bundle_name = server_dir.name  # typically "vab"
+        server_dest_prefix = f"{SERVER_DEST}/{server_bundle_name}"
+        n_before = len(staged_paths)
+        copy_tree(server_dir, server_dest_prefix)
+        print(f"  [server] {server_dir.name}/ ({len(staged_paths) - n_before} files) -> {SERVER_DEST}/")
+    else:
+        print("  [server] skipped (--no-server)")
 
     # Model export tool (optional — large bundle, includes torch/transformers)
     if export_tool_dir is not None:
@@ -158,11 +167,14 @@ def stage_files(
     else:
         print("  [export] skipped (pass --export-tool-dir dist/vab_export to include)")
 
-    # ONNX model directory
-    model_dest_prefix = MODEL_DEST
-    n_before = len(staged_paths)
-    copy_tree(model_dir, model_dest_prefix)
-    print(f"  [model]  {model_dir.name}/ ({len(staged_paths) - n_before} files) -> {MODEL_DEST}/")
+    # ONNX model directory (optional — omitted from base package, downloaded on demand)
+    if model_dir is not None:
+        model_dest_prefix = f"{MODELS_DEST}/{model_dir.name}"
+        n_before = len(staged_paths)
+        copy_tree(model_dir, model_dest_prefix)
+        print(f"  [model]  {model_dir.name}/ ({len(staged_paths) - n_before} files) -> resources/.../models/")
+    else:
+        print("  [model]  skipped (pass --include-model <dir> to bundle a model)")
 
     return staged_paths
 
@@ -187,12 +199,11 @@ def write_manifest(staging: Path, staged_paths: list[str], plat: str):
     print(f"  [manifest] Manifest.dsx ({len(staged_paths)} entries)")
 
 
-def write_supplement(staging: Path):
-    # ProductStoreIDX format: {SKU}-{PackageID}
+def write_supplement(staging: Path, product_name: str = "BMF Content Browser", product_id: str = "999101-1"):
     supplement = dedent(f"""\
         <ProductSupplement VERSION="0.1">
-          <ProductName VALUE="BMF Content Browser"/>
-          <ProductStoreIDX VALUE="999101-1"/>
+          <ProductName VALUE="{product_name}"/>
+          <ProductStoreIDX VALUE="{product_id}"/>
           <InstallTypes VALUE="Application"/>
           <ProductTags VALUE="DAZStudio4_5"/>
         </ProductSupplement>
@@ -211,35 +222,49 @@ def zip_staging(staging: Path, out_path: Path):
 
 def main():
     parser = argparse.ArgumentParser(description="Build BMF Content Browser DIM package")
-    parser.add_argument("--plugin-dll", help="Path to BmfContentBrowser.dll / .dylib")
-    parser.add_argument("--server-dir", help="PyInstaller output dir (default: dist/vab)")
-    parser.add_argument("--export-tool-dir",
-                        help="Export tool dir (default: dist/vab_export if it exists, else omitted)")
-    parser.add_argument("--model-dir", help="ONNX model dir (default: models/bge-large-en-v1.5)")
-    parser.add_argument("--version", default="1.0.0", help="Package version (default: 1.0.0)")
-    parser.add_argument("--out-dir", help="Output directory (default: dist)")
-    parser.add_argument("--platform", choices=["windows", "macos"], help="Target platform")
+    parser.add_argument("--plugin-dll",    help="Path to BmfContentBrowser.dll / .dylib")
+    parser.add_argument("--server-dir",    help="PyInstaller output dir (default: dist/vab)")
+    parser.add_argument("--export-tool-dir", help="Export tool dir to include (optional)")
+    parser.add_argument("--include-model", metavar="MODEL_DIR",
+                        help="Include this ONNX model dir in the package (optional, not in base package)")
+    parser.add_argument("--no-plugin",     action="store_true", help="Exclude the plugin DLL")
+    parser.add_argument("--no-server",     action="store_true", help="Exclude the server bundle")
+    parser.add_argument("--product-id",   default="999101-1",
+                        help="Product store ID for Supplement.dsx (default: 999101-1)")
+    parser.add_argument("--product-name", default="BMF Content Browser",
+                        help="Product name for Supplement.dsx")
+    parser.add_argument("--out-file",     help="Output zip filename (default: auto from product-id)")
+    parser.add_argument("--version",      default="1.0.0", help="Package version (default: 1.0.0)")
+    parser.add_argument("--out-dir",      help="Output directory (default: dist)")
+    parser.add_argument("--platform",     choices=["windows", "macos"], help="Target platform")
     args = parser.parse_args()
 
     plat = args.platform or detect_platform()
     version = args.version
     out_dir = Path(args.out_dir) if args.out_dir else DIST
 
-    server_dir = Path(args.server_dir) if args.server_dir else ROOT / "dist" / "vab"
-    model_dir = Path(args.model_dir) if args.model_dir else ROOT / "models" / MODEL_NAME
+    include_plugin = not args.no_plugin
+    include_server = not args.no_server
 
-    # Export tool must be explicitly requested — it is ~3 GB and is distributed
-    # as a separate package, not bundled into the main DIM zip by default.
+    plugin_dll: Path | None = None
+    if include_plugin:
+        plugin_dll = find_plugin_dll(plat, args.plugin_dll)
+
+    server_dir: Path | None = None
+    if include_server:
+        server_dir = Path(args.server_dir) if args.server_dir else ROOT / "dist" / "vab"
+
+    model_dir: Path | None = Path(args.include_model) if args.include_model else None
     export_tool_dir: Path | None = Path(args.export_tool_dir) if args.export_tool_dir else None
 
-    plugin_dll = find_plugin_dll(plat, args.plugin_dll)
-
-    # Validate inputs
+    # Validate that the paths that are supposed to exist actually do.
     errors = []
-    if not server_dir.exists():
+    if include_server and server_dir and not server_dir.exists():
         errors.append(f"Server bundle not found: {server_dir}\n  → Run: make release-exe")
-    if not model_dir.exists():
+    if model_dir and not model_dir.exists():
         errors.append(f"ONNX model not found: {model_dir}\n  → Run: python export_model.py")
+    if export_tool_dir and not export_tool_dir.exists():
+        errors.append(f"Export tool not found: {export_tool_dir}\n  → Run: make release-export-exe")
     if errors:
         print("ERROR: missing build inputs:")
         for e in errors:
@@ -251,18 +276,27 @@ def main():
     shutil.rmtree(staging, ignore_errors=True)
     staging.mkdir()
 
-    out_zip = out_dir / "IM00999101-01_BmfDazContentNLBrowser.zip"
+    if args.out_file:
+        out_zip = out_dir / args.out_file
+    elif args.product_id == "999101-1":
+        out_zip = out_dir / "IM00999101-01_BmfDazContentNLBrowser.zip"
+    elif args.product_id == "999101-2":
+        out_zip = out_dir / "IM00999101-02_BmfDazContentNLBrowserExportTool.zip"
+    else:
+        safe_name = args.product_name.replace(" ", "")
+        out_zip = out_dir / f"IM{args.product_id.replace('-', '')}_{safe_name}.zip"
 
     print(f"Building DIM package  version={version}  platform={plat}")
-    print(f"  plugin:  {plugin_dll}")
-    print(f"  server:  {server_dir}")
+    print(f"  product: {args.product_name} ({args.product_id})")
+    print(f"  plugin:  {plugin_dll or '(not included)'}")
+    print(f"  server:  {server_dir or '(not included)'}")
     print(f"  export:  {export_tool_dir or '(not included)'}")
-    print(f"  model:   {model_dir}")
+    print(f"  model:   {model_dir or '(not included)'}")
     print()
 
     staged = stage_files(staging, plugin_dll, server_dir, model_dir, export_tool_dir)
     write_manifest(staging, staged, plat)
-    write_supplement(staging)
+    write_supplement(staging, args.product_name, args.product_id)
     zip_staging(staging, out_zip)
     shutil.rmtree(staging)
 
