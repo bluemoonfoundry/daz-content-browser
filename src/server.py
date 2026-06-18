@@ -114,7 +114,12 @@ async def lifespan(app: FastAPI):
         )
     if APP_MODE == "demo":
         logger.info("Server running in DEMO mode — PostgreSQL not required.")
-    load_embedding_model()
+    try:
+        load_embedding_model()
+    except RuntimeError as exc:
+        logger.warning(
+            f"[embedding] Model not loaded — search and indexing will be unavailable: {exc}"
+        )
     yield
 
 

@@ -59,10 +59,16 @@ def _load_from_cache():
 
 def load_embedding_model():
     """Load (and if necessary export) the model. Intended to be called at server startup."""
+    import sys
     global _session, _tokenizer
 
     onnx_path = _MODEL_DIR / "model.onnx"
     if not onnx_path.exists():
+        if getattr(sys, 'frozen', False):
+            raise RuntimeError(
+                f"ONNX model not found at '{_MODEL_DIR}'. "
+                f"Download and export the model with the export tool before switching models."
+            )
         _export_model()
 
     _session, _tokenizer = _load_from_cache()
@@ -70,10 +76,15 @@ def load_embedding_model():
 
 
 def get_embedding_model():
-    """Return the cached session + tokenizer, initialising them on first call."""
+    """Return the cached session + tokenizer, raising RuntimeError if the model is unavailable."""
     global _session, _tokenizer
     if _session is None:
         load_embedding_model()
+    if _session is None:
+        raise RuntimeError(
+            f"Embedding model is not loaded. "
+            f"Ensure the ONNX model files are present at '{_MODEL_DIR}'."
+        )
     return _session, _tokenizer
 
 
