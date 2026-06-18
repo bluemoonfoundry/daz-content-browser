@@ -16,7 +16,7 @@ datas = []
 binaries = []
 hiddenimports = []
 
-for pkg in ('torch', 'transformers', 'optimum', 'onnxruntime', 'tokenizers', 'huggingface_hub'):
+for pkg in ('torch', 'transformers', 'optimum', 'onnx', 'onnxruntime', 'tokenizers', 'huggingface_hub'):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b
