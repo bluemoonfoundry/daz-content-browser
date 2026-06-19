@@ -283,11 +283,6 @@ def main():
         sys.exit(1)
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    # Use the output filename as the staging dir name so concurrent builds don't collide.
-    staging = out_dir / (out_zip.stem + "-staging")
-    if staging.exists():
-        shutil.rmtree(staging)
-    staging.mkdir()
 
     if args.out_file:
         out_zip = out_dir / args.out_file
@@ -298,6 +293,12 @@ def main():
     else:
         safe_name = args.product_name.replace(" ", "")
         out_zip = out_dir / f"IM{args.product_id.replace('-', '')}_{safe_name}.zip"
+
+    # Use the output filename as the staging dir name so concurrent builds don't collide.
+    staging = out_dir / (out_zip.stem + "-staging")
+    if staging.exists():
+        shutil.rmtree(staging)
+    staging.mkdir()
 
     print(f"Building DIM package  version={version}  platform={plat}")
     print(f"  product: {args.product_name} ({args.product_id})")
