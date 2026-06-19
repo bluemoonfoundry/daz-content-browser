@@ -283,8 +283,10 @@ def main():
         sys.exit(1)
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    staging = out_dir / "dim-staging"
-    shutil.rmtree(staging, ignore_errors=True)
+    # Use the output filename as the staging dir name so concurrent builds don't collide.
+    staging = out_dir / (out_zip.stem + "-staging")
+    if staging.exists():
+        shutil.rmtree(staging)
     staging.mkdir()
 
     if args.out_file:
