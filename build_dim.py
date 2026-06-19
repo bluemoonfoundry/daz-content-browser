@@ -211,22 +211,12 @@ def write_supplement(staging: Path, product_name: str = "BMF Content Browser", p
     (staging / "Supplement.dsx").write_text(supplement, encoding="utf-8")
 
 
-# Extensions that are already binary/compressed and gain little from deflate.
-# Storing them uncompressed makes DIM installation fast (no decompression step).
-_STORE_EXTENSIONS = {".onnx", ".bin", ".pt", ".pth"}
-
-
 def zip_staging(staging: Path, out_path: Path):
-    with zipfile.ZipFile(out_path, "w") as zf:
+    with zipfile.ZipFile(out_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
         for item in sorted(staging.rglob("*")):
             if not item.is_file():
                 continue
-            if item.suffix.lower() in _STORE_EXTENSIONS:
-                zf.write(item, item.relative_to(staging).as_posix(),
-                         compress_type=zipfile.ZIP_STORED)
-            else:
-                zf.write(item, item.relative_to(staging).as_posix(),
-                         compress_type=zipfile.ZIP_DEFLATED, compresslevel=6)
+            zf.write(item, item.relative_to(staging).as_posix())
     size_mb = out_path.stat().st_size / 1_048_576
     print(f"\nCreated {out_path} ({size_mb:.1f} MB)")
 
