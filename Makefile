@@ -22,6 +22,10 @@ help:                ## Show available targets
 install:             ## Install Python deps and UI node modules
 	git submodule update --init ui/src
 	pip install -e ".[local_llm]"
+	# chromadb/optimum pull in plain onnxruntime transitively, which fights with
+	# onnxruntime-directml for the same import namespace; force it to win so GPU
+	# acceleration is actually active instead of a silent CPU fallback.
+	pip install --no-deps --force-reinstall onnxruntime-directml
 	cd $(UI_SRC) && npm ci
 
 install-torch-cpu:   ## Install CPU-only PyTorch (no GPU required)

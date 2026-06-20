@@ -13,3 +13,10 @@
 # Windows, covering NVIDIA, AMD, and Intel GPUs. Falls back to CPU automatically
 # if no compatible GPU is found. Not compatible with plain onnxruntime or
 # onnxruntime-gpu — only one ORT package can be installed at a time.
+#
+# chromadb and optimum both pull in plain onnxruntime transitively, which shares
+# onnxruntime-directml's import namespace and can silently win the install,
+# leaving you on CPU with no error. install.py / `make install` force-reinstall
+# onnxruntime-directml last to guarantee it stays active; if installing manually,
+# run `pip install --no-deps --force-reinstall onnxruntime-directml` afterward.
+# Check src/embedding_utils.py's startup log line for the actually active provider.

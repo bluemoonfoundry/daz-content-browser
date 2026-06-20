@@ -2,7 +2,8 @@
 """Interactive installer for Visual Asset Browser.
 
 Creates the virtual environment and installs all dependencies.
-Embedding inference runs via ONNX Runtime on CPU — no GPU required.
+Embedding inference runs via ONNX Runtime, using DirectML (DX12) GPU
+acceleration when available and falling back to CPU automatically.
 
 Usage: python install.py
 """
@@ -70,6 +71,13 @@ def main():
     print("\nInstalling application dependencies...")
     run([str(pip), "install", "-e", ".[local_llm]"])
 
+    # chromadb and optimum both pull in plain `onnxruntime` transitively, which
+    # shares its import namespace with `onnxruntime-directml` — whichever package
+    # is installed last silently wins. Force-reinstall the DirectML build last so
+    # GPU acceleration is actually active instead of a silent CPU fallback.
+    print("\nEnsuring onnxruntime-directml takes priority over plain onnxruntime...")
+    run([str(pip), "install", "--no-deps", "--force-reinstall", "onnxruntime-directml"])
+
     # ── Step 4: create .env if missing ────────────────────
     env_file = ROOT / ".env"
     if not env_file.exists():
@@ -82,7 +90,7 @@ def main():
     print("=" * 52)
     print("  Installation complete!")
     print()
-    print("  Embedding: ONNX Runtime on CPU (no GPU required)")
+    print("  Embedding: ONNX Runtime with DirectML GPU acceleration (CPU fallback if unavailable)")
     print("  Model will be downloaded on first server start.")
     print()
     print("  Usage:")
