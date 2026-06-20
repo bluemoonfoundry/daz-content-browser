@@ -53,7 +53,11 @@ def _load_from_cache():
     tokenizer.enable_truncation(max_length=512)
     tokenizer.enable_padding()
 
-    logger.info("[embedding] ONNX model loaded.")
+    # session.get_providers() reflects what ORT actually selected, which can silently
+    # differ from `providers` above (e.g. DmlExecutionProvider requested but the
+    # installed onnxruntime package doesn't include it, so it falls back to CPU).
+    logger.info(f"[embedding] ONNX model loaded. Available providers: {available}; "
+                f"active providers: {session.get_providers()}")
     return session, tokenizer
 
 
