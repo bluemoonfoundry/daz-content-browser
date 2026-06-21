@@ -4,6 +4,7 @@ import os
 import argparse
 import json
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from utilities import fetch_json_from_url, fetch_html_content, async_fetch_json_from_url, async_fetch_html_content
@@ -212,6 +213,7 @@ def generate_and_store_embeddings(processed_skus, on_progress=None, cancel_check
 
     BATCH_SIZE = int(os.getenv('BATCH_SIZE', '512'))
     had_errors = False
+    stage_seconds = {"sqlite_read": 0.0, "embed": 0.0, "chroma_upsert": 0.0}
 
     # Loop through the list of SKUs in chunks of BATCH_SIZE
     for i in range(0, total, BATCH_SIZE):
@@ -223,7 +225,9 @@ def generate_and_store_embeddings(processed_skus, on_progress=None, cancel_check
 
         logger.info(f"Embedding batch {i//BATCH_SIZE + 1}/{(total-1)//BATCH_SIZE + 1} ({len(sku_batch)} items)...")
 
+        t0 = time.perf_counter()
         rows_to_embed = sqlite_db.get_content_by_sku_batch(sku_batch)
+        stage_seconds["sqlite_read"] += time.perf_counter() - t0
 
         logger.debug(f"Fetched {len(rows_to_embed)} rows from SQLite for embedding.")
 
@@ -254,10 +258,13 @@ def generate_and_store_embeddings(processed_skus, on_progress=None, cancel_check
         ]
 
         logger.info(f"Generating embeddings for {len(documents)} documents...")
+        t0 = time.perf_counter()
         embeddings = generate_embeddings(documents, is_query=False).tolist()
+        stage_seconds["embed"] += time.perf_counter() - t0
 
         # 4. STORE IN CHROMADB IN A BATCH
         logger.info("Upserting batch into ChromaDB...")
+        t0 = time.perf_counter()
         try:
             chroma_db_manager.collection.upsert(
                 ids=ids,
@@ -265,6 +272,7 @@ def generate_and_store_embeddings(processed_skus, on_progress=None, cancel_check
                 metadatas=metadatas,
                 documents=documents,
             )
+            stage_seconds["chroma_upsert"] += time.perf_counter() - t0
             logger.info(f"Upserted {len(ids)} documents into collection '{chroma_db_manager.collection_name}'.")
             if on_progress:
                 on_progress("embed", min(i + BATCH_SIZE, total), total, f"batch {i//BATCH_SIZE + 1}")
@@ -278,12 +286,18 @@ def generate_and_store_embeddings(processed_skus, on_progress=None, cancel_check
                     metadatas=metadatas,
                     documents=documents,
                 )
+                stage_seconds["chroma_upsert"] += time.perf_counter() - t0
                 logger.info(f"Upserted {len(ids)} documents after reconnect.")
                 if on_progress:
                     on_progress("embed", min(i + BATCH_SIZE, total), total, f"batch {i//BATCH_SIZE + 1}")
             except Exception as e2:
                 logger.error(f"Error publishing batch {i//BATCH_SIZE + 1} to ChromaDB: {e2}")
                 had_errors = True
+
+    stage_total = sum(stage_seconds.values())
+    if stage_total > 0:
+        breakdown = ", ".join(f"{name}={secs:.1f}s ({secs / stage_total:.0%})" for name, secs in stage_seconds.items())
+        logger.info(f"Embed-loop stage timing breakdown: {breakdown}")
 
     if had_errors:
         logger.warning("Embedding phase completed with errors — some batches were not indexed.")
