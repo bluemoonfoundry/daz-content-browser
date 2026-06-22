@@ -27,11 +27,25 @@ The server is the product. A web UI is included as a reference client and demons
 
 ## Installation
 
-Three distribution formats are available from the [Releases page](https://github.com/bluemoonfoundry/daz-content-browser/releases).
+The software requires requires Python 3.11+ installed. No other setup. We are working on building out an installer that wraps the Python build explictly into a standalone executable. 
 
-### Option A — Release zip (recommended for most users)
+## Option A -- Clone, venv, and run 
 
-Requires Python 3.11+ installed. No other setup.
+The simplest way to get this working in a development setup is to clone the repo, setup a virtual environment, and install the requirements, and run the server. Note that the PyTorch installation in this method needs to be done manually depending on your specific CUDA version. 
+
+```
+git clone https://github.com/bluemoonfoundry/daz-content-browser.git
+
+python -m venv install .venv
+
+source ./venv/Scripts/activate
+
+pip install -r requirements.txt
+
+python vab.py server
+```
+
+## Option B -- Direct Run
 
 1. Download `vab-release.zip` and unzip to a permanent location (e.g. `C:\Tools\VAB`).
 2. Open a terminal in that folder and run the installer:
@@ -57,21 +71,6 @@ Requires Python 3.11+ installed. No other setup.
 
    Interactive API docs are always available at `http://localhost:8000/docs`
 
-### Option B — pip install
-
-```bash
-pip install "visual-asset-browser[local_llm]"
-pip install torch --index-url https://download.pytorch.org/whl/cpu
-vab server
-```
-
-The `vab` command is added to your PATH by pip.
-
-### Option C — Standalone executable (no Python required)
-
-Download `vab-windows.zip`, unzip it, and run `vab\vab.exe server`. No Python installation needed.
-
-> The standalone executable bundles ONNX Runtime and all dependencies. Options A and B are faster to download.
 
 ---
 
