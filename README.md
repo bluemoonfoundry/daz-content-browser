@@ -29,6 +29,9 @@ The server is the product. A web UI is included as a reference client and demons
 
 The software requires requires Python 3.11+ installed. No other setup. We are working on building out an installer that wraps the Python build explictly into a standalone executable. 
 
+> [!IMPORTANT]
+> If you are installing on MacOS, you'll have to remove or comment out the "onnxruntime-directml" dependency in the pyproject.toml file before you can run the installation step
+
 ## Option A -- Clone, venv, and run 
 
 The simplest way to get this working in a development setup is to clone the repo, setup a virtual environment, and install the requirements, and run the server. Note that the PyTorch installation in this method needs to be done manually depending on your specific CUDA version. 
@@ -40,7 +43,7 @@ python -m venv install .venv
 
 source ./venv/Scripts/activate
 
-pip install -r requirements.txt
+pip install -e ".[local-llm]"
 
 python vab.py server
 ```
