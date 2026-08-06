@@ -7,6 +7,7 @@ import logging
 import os
 
 from dsf_parser import parse_dsf_file, extract_referenced_guids
+from embedding_utils import generate_embeddings
 from tmb_format import write_tmb
 
 logger = logging.getLogger(__name__)
@@ -87,3 +88,48 @@ def index_library(library_root: str, tmb_output_dir: str, morph_index_manager, f
     logger.info(f"Rebuilt dependency graph: {edge_count} edges.")
     logger.info(f"Index run complete: {summary}")
     return summary
+
+
+def _build_embedding_text(row) -> str:
+    label = row["label"] or ""
+    group_path = row["group_path"] or ""
+    return f"{label}. Category: {group_path}." if group_path else f"{label}."
+
+
+def embed_and_store_morphs(morph_index_manager, chroma_manager, guids: list, on_progress=None) -> int:
+    if not guids:
+        return 0
+
+    batch_size = int(os.getenv("BATCH_SIZE", "512"))
+    total = len(guids)
+    embedded = 0
+
+    for i in range(0, total, batch_size):
+        batch_guids = guids[i:i + batch_size]
+        rows = morph_index_manager.get_morphs_by_guids(batch_guids)
+        if not rows:
+            continue
+
+        documents = [_build_embedding_text(row) for row in rows]
+        metadatas = [
+            {
+                "guid": row["guid"],
+                "label": row["label"] or "",
+                "name": row["name"] or "",
+                "target_figure": row["target_figure"] or "",
+                "group_path": row["group_path"] or "",
+            }
+            for row in rows
+        ]
+        ids = [row["guid"] for row in rows]
+
+        embeddings = generate_embeddings(documents, is_query=False).tolist()
+        chroma_manager.collection.upsert(
+            ids=ids, embeddings=embeddings, metadatas=metadatas, documents=documents,
+        )
+        embedded += len(ids)
+
+        if on_progress:
+            on_progress("embed", min(i + batch_size, total), total, f"batch {i // batch_size + 1}")
+
+    return embedded

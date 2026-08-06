@@ -1,9 +1,10 @@
 import os
 import shutil
+from unittest.mock import MagicMock, patch
 
 import pytest
 from managers.morph_index_manager import MorphIndexManager
-from managers.morph_transpiler import index_library
+from managers.morph_transpiler import index_library, embed_and_store_morphs
 from tmb_format import read_tmb
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "dsf")
@@ -96,3 +97,35 @@ def test_index_library_rebuilds_dependencies(library, tmp_path):
     # Neither fixture references another *morph* (the JCM references a bone
     # rotation), so the dependency graph should be empty but not error.
     assert db.get_stats()["dependency_count"] == 0
+
+
+def test_embed_and_store_morphs_upserts_into_chroma(library, tmp_path):
+    db = MorphIndexManager(str(tmp_path / "morph_index.db"))
+    db.setup_db()
+    tmb_dir = str(tmp_path / "morph_cache")
+    summary = index_library(library, tmb_dir, db)
+
+    fake_chroma = MagicMock()
+    fake_embeddings = MagicMock()
+    fake_embeddings.tolist.return_value = [[0.1] * 1024, [0.2] * 1024]
+
+    with patch("managers.morph_transpiler.generate_embeddings", return_value=fake_embeddings):
+        count = embed_and_store_morphs(db, fake_chroma, summary["new_guids"])
+
+    assert count == 2
+    fake_chroma.collection.upsert.assert_called_once()
+    call_kwargs = fake_chroma.collection.upsert.call_args.kwargs
+    assert sorted(call_kwargs["ids"]) == sorted(summary["new_guids"])
+    assert len(call_kwargs["embeddings"]) == 2
+    assert len(call_kwargs["documents"]) == 2
+    assert len(call_kwargs["metadatas"]) == 2
+    assert "label" in call_kwargs["metadatas"][0]
+
+
+def test_embed_and_store_morphs_returns_zero_for_empty_guids(tmp_path):
+    db = MorphIndexManager(str(tmp_path / "morph_index.db"))
+    db.setup_db()
+    fake_chroma = MagicMock()
+    count = embed_and_store_morphs(db, fake_chroma, [])
+    assert count == 0
+    fake_chroma.collection.upsert.assert_not_called()
