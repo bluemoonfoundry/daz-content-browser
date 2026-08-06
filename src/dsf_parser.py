@@ -79,7 +79,7 @@ def parse_dsf_file(path: str) -> Optional[ParsedMorph]:
     return None
 
 
-def extract_referenced_guids(formulas_json: Optional[str]) -> list:
+def extract_referenced_guids(formulas_json: str | None) -> list[str]:
     """Extracts raw path strings from "push url" operations in a formulas_json
     blob. These are candidate morph guids -- callers (the SQLite dependency
     rebuild) are responsible for checking which ones resolve to an indexed
