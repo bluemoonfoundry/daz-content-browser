@@ -77,3 +77,26 @@ def parse_dsf_file(path: str) -> Optional[ParsedMorph]:
         )
 
     return None
+
+
+def extract_referenced_guids(formulas_json: Optional[str]) -> list:
+    """Extracts raw path strings from "push url" operations in a formulas_json
+    blob. These are candidate morph guids -- callers (the SQLite dependency
+    rebuild) are responsible for checking which ones resolve to an indexed
+    morph; non-morph targets (e.g. bone rotations) simply won't match.
+    """
+    if not formulas_json:
+        return []
+
+    formulas = json.loads(formulas_json)
+    refs = []
+    for formula in formulas:
+        for op in formula.get("operations", []):
+            url = op.get("url")
+            if not url:
+                continue
+            # url looks like "Label:/data/.../Target.dsf#Node?property"
+            after_label = url.split(":", 1)[-1] if ":" in url else url
+            path = after_label.split("#", 1)[0]
+            refs.append(path)
+    return refs
