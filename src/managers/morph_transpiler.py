@@ -19,7 +19,23 @@ def compute_content_hash(path: str) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def validate_library_root(library_root: str) -> str:
+    """Returns the library's data/ directory path, raising FileNotFoundError
+    if it doesn't exist. Callers must validate before taking any destructive
+    --force action (wiping the SQLite index, the .tmb cache, or the Chroma
+    collection) so a typo'd path fails fast without side effects.
+    """
+    data_root = os.path.join(library_root, "data")
+    if not os.path.isdir(data_root):
+        raise FileNotFoundError(
+            f"No 'data' directory found under library root: {library_root!r} (expected {data_root!r})"
+        )
+    return data_root
+
+
 def index_library(library_root: str, tmb_output_dir: str, morph_index_manager, force: bool = False, on_progress=None) -> dict:
+    data_root = validate_library_root(library_root)
+
     if force:
         morph_index_manager.setup_db(force_reset=True)
     else:
@@ -29,12 +45,6 @@ def index_library(library_root: str, tmb_output_dir: str, morph_index_manager, f
         "scanned": 0, "ingested": 0, "skipped_no_deltas": 0,
         "skipped_unchanged": 0, "errors": 0, "new_guids": [],
     }
-
-    data_root = os.path.join(library_root, "data")
-    if not os.path.isdir(data_root):
-        raise FileNotFoundError(
-            f"No 'data' directory found under library root: {library_root!r} (expected {data_root!r})"
-        )
 
     for dirpath, _dirnames, filenames in os.walk(data_root):
         for filename in filenames:

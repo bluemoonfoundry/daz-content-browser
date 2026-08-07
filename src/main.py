@@ -58,12 +58,18 @@ def load_command(args):
 def morphs_index_command(args):
     """Indexes .dsf morph files from a DAZ library into morph_index.db, morph_cache/, and ChromaDB."""
     from managers.morph_index_manager import MorphIndexManager
-    from managers.morph_transpiler import index_library, embed_and_store_morphs
+    from managers.morph_transpiler import index_library, embed_and_store_morphs, validate_library_root
     from managers.chroma_db_manager import ChromaDbManager
 
     library_path = args.library_path or os.environ.get("MORPH_LIBRARY_PATH")
     if not library_path:
         print("Error: --library-path is required (or set MORPH_LIBRARY_PATH).", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        validate_library_root(library_path)
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
     morph_db_path = os.environ.get("MORPH_INDEX_DB_PATH", "morph_index.db")

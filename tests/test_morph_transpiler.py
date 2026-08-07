@@ -99,6 +99,24 @@ def test_index_library_raises_for_missing_data_dir(tmp_path):
         index_library(str(lib_root), tmb_dir, db)
 
 
+def test_index_library_validates_path_before_force_wipes_existing_data(library, tmp_path):
+    db = MorphIndexManager(str(tmp_path / "morph_index.db"))
+    tmb_dir = str(tmp_path / "morph_cache")
+
+    # Populate the index with real data first.
+    first = index_library(library, tmb_dir, db)
+    assert first["ingested"] == 2
+    assert db.get_stats()["morph_count"] == 2
+
+    # A --force run against a bad path must fail before wiping anything.
+    bad_root = str(tmp_path / "not_a_real_library")
+    os.makedirs(bad_root)
+    with pytest.raises(FileNotFoundError):
+        index_library(bad_root, tmb_dir, db, force=True)
+
+    assert db.get_stats()["morph_count"] == 2
+
+
 def test_index_library_rebuilds_dependencies(library, tmp_path):
     db = MorphIndexManager(str(tmp_path / "morph_index.db"))
     db.setup_db()
