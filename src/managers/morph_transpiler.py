@@ -124,9 +124,20 @@ def embed_and_store_morphs(morph_index_manager, chroma_manager, guids: list, on_
         ids = [row["guid"] for row in rows]
 
         embeddings = generate_embeddings(documents, is_query=False).tolist()
-        chroma_manager.collection.upsert(
-            ids=ids, embeddings=embeddings, metadatas=metadatas, documents=documents,
-        )
+        try:
+            chroma_manager.collection.upsert(
+                ids=ids, embeddings=embeddings, metadatas=metadatas, documents=documents,
+            )
+        except Exception as e:
+            logger.warning(f"ChromaDB upsert failed ({e}), reconnecting and retrying...")
+            try:
+                chroma_manager.reconnect()
+                chroma_manager.collection.upsert(
+                    ids=ids, embeddings=embeddings, metadatas=metadatas, documents=documents,
+                )
+            except Exception as e2:
+                logger.error(f"Error publishing batch {i // batch_size + 1} to ChromaDB: {e2}")
+                continue
         embedded += len(ids)
 
         if on_progress:
