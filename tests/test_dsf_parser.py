@@ -1,8 +1,7 @@
 import json
 import os
 
-import pytest
-from dsf_parser import parse_dsf_file, extract_referenced_guids
+from dsf_parser import parse_dsf_file, extract_referenced_guids, _resolve_target_figure
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "dsf")
 
@@ -95,3 +94,22 @@ def test_extract_referenced_guids_handles_pathless_name_form():
     ])
     refs = extract_referenced_guids(formulas_json)
     assert refs == ["name:pJCMSomething"]
+
+
+def test_resolve_target_figure_from_url_encoded_parent():
+    """A realistic URL-encoded parent URL should resolve to the figure name."""
+    parent = "/data/%21Daz%20Original/G3HoodedCloak/Hooded%20Cloak/GnHdCloak_G3_23369.dsf#geometry"
+    result = _resolve_target_figure(parent)
+    assert result == "GnHdCloak_G3_23369"
+
+
+def test_resolve_target_figure_returns_none_for_none_input():
+    """None input should return None."""
+    result = _resolve_target_figure(None)
+    assert result is None
+
+
+def test_resolve_target_figure_returns_none_for_empty_string():
+    """Empty string input should return None."""
+    result = _resolve_target_figure("")
+    assert result is None

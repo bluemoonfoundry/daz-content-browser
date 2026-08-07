@@ -27,10 +27,23 @@ def read_tmb(path: str):
     list of (vertex_index, dx, dy, dz) tuples."""
     with open(path, "rb") as f:
         header = f.read(_HEADER.size)
+        if len(header) < _HEADER.size:
+            raise ValueError("Truncated .tmb file: header too short")
         magic, vertex_count, delta_count = _HEADER.unpack(header)
         if magic != _MAGIC:
             raise ValueError(f"Not a TMB file (bad magic bytes: {magic!r})")
+
+        # Check if remaining file has enough bytes for all deltas
+        remaining = f.read()
+        if len(remaining) < delta_count * _DELTA.size:
+            raise ValueError(
+                f"Truncated .tmb file: expected {delta_count} deltas "
+                f"({delta_count * _DELTA.size} bytes) but file only has {len(remaining)} bytes"
+            )
+
         deltas = []
-        for _ in range(delta_count):
-            deltas.append(_DELTA.unpack(f.read(_DELTA.size)))
+        for i in range(delta_count):
+            offset = i * _DELTA.size
+            delta_bytes = remaining[offset:offset + _DELTA.size]
+            deltas.append(_DELTA.unpack(delta_bytes))
     return vertex_count, deltas

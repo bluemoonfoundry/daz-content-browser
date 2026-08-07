@@ -20,7 +20,7 @@ class ParsedMorph:
     target_figure: Optional[str]
     group_path: Optional[str]
     vertex_count: int
-    deltas: list
+    deltas: list[tuple[int, float, float, float]]
     min_value: float
     max_value: float
     is_clamped: bool
