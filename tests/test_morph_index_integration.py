@@ -35,7 +35,7 @@ def test_full_pipeline_end_to_end(tmp_path):
     # Act: run the full chain
     summary = index_library(str(lib_root), tmb_dir, db)
     with patch("managers.morph_transpiler.generate_embeddings", return_value=fake_embeddings):
-        embedded_count = embed_and_store_morphs(db, fake_chroma, summary["new_guids"])
+        embedded_count, failed_guids = embed_and_store_morphs(db, fake_chroma, summary["new_guids"])
 
     # Assert: first run completes without exception
     # (ingested==2 proves pipeline ran; errors==1 proves error handling worked)
@@ -44,6 +44,7 @@ def test_full_pipeline_end_to_end(tmp_path):
 
     # Assert: sqlite->chroma handoff works (embedded_count matches new_guids from index_library)
     assert embedded_count == 2
+    assert failed_guids == []
 
     # Act again: re-run the full chain to prove incremental behavior holds end-to-end
     second_summary = index_library(str(lib_root), tmb_dir, db)

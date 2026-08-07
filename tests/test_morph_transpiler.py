@@ -164,9 +164,10 @@ def test_embed_and_store_morphs_upserts_into_chroma(library, tmp_path):
     fake_embeddings.tolist.return_value = [[0.1] * 1024, [0.2] * 1024]
 
     with patch("managers.morph_transpiler.generate_embeddings", return_value=fake_embeddings):
-        count = embed_and_store_morphs(db, fake_chroma, summary["new_guids"])
+        count, failed_guids = embed_and_store_morphs(db, fake_chroma, summary["new_guids"])
 
     assert count == 2
+    assert failed_guids == []
     fake_chroma.collection.upsert.assert_called_once()
     call_kwargs = fake_chroma.collection.upsert.call_args.kwargs
     assert sorted(call_kwargs["ids"]) == sorted(summary["new_guids"])
@@ -180,9 +181,35 @@ def test_embed_and_store_morphs_returns_zero_for_empty_guids(tmp_path):
     db = MorphIndexManager(str(tmp_path / "morph_index.db"))
     db.setup_db()
     fake_chroma = MagicMock()
-    count = embed_and_store_morphs(db, fake_chroma, [])
+    count, failed_guids = embed_and_store_morphs(db, fake_chroma, [])
     assert count == 0
+    assert failed_guids == []
     fake_chroma.collection.upsert.assert_not_called()
+
+
+def test_embed_and_store_morphs_returns_failed_guids_on_double_failure(library, tmp_path):
+    """When both the initial upsert and the reconnect-retry fail, the batch's
+    guids should be reported back via failed_guids instead of silently
+    dropped, so the caller can decide what to do (e.g. warn, retry later).
+    """
+    db = MorphIndexManager(str(tmp_path / "morph_index.db"))
+    db.setup_db()
+    tmb_dir = str(tmp_path / "morph_cache")
+    summary = index_library(library, tmb_dir, db)
+
+    fake_chroma = MagicMock()
+    fake_chroma.collection.upsert.side_effect = RuntimeError("chroma is down")
+    fake_embeddings = MagicMock()
+    fake_embeddings.tolist.return_value = [[0.1] * 1024, [0.2] * 1024]
+
+    with patch("managers.morph_transpiler.generate_embeddings", return_value=fake_embeddings):
+        count, failed_guids = embed_and_store_morphs(db, fake_chroma, summary["new_guids"])
+
+    assert count == 0
+    assert sorted(failed_guids) == sorted(summary["new_guids"])
+    # Both the initial attempt and the retry (after reconnect) were tried.
+    assert fake_chroma.collection.upsert.call_count == 2
+    fake_chroma.reconnect.assert_called_once()
 
 
 def test_embed_and_store_morphs_batches_correctly_across_multiple_iterations(tmp_path, monkeypatch):
@@ -211,10 +238,11 @@ def test_embed_and_store_morphs_batches_correctly_across_multiple_iterations(tmp
         return mock_embeddings
 
     with patch("managers.morph_transpiler.generate_embeddings", side_effect=mock_generate_embeddings):
-        count = embed_and_store_morphs(db, fake_chroma, guids)
+        count, failed_guids = embed_and_store_morphs(db, fake_chroma, guids)
 
     # Total count should be 5 (all guids embedded)
     assert count == 5
+    assert failed_guids == []
 
     # upsert should be called 3 times (batch 1: 2, batch 2: 2, batch 3: 1)
     assert fake_chroma.collection.upsert.call_count == 3
