@@ -129,3 +129,49 @@ def test_embed_and_store_morphs_returns_zero_for_empty_guids(tmp_path):
     count = embed_and_store_morphs(db, fake_chroma, [])
     assert count == 0
     fake_chroma.collection.upsert.assert_not_called()
+
+
+def test_embed_and_store_morphs_batches_correctly_across_multiple_iterations(tmp_path, monkeypatch):
+    """Test that batching loop and upsert calls work correctly with multiple batches."""
+    # Set BATCH_SIZE to 2 so 5 guids will result in 3 batches (2, 2, 1)
+    monkeypatch.setenv("BATCH_SIZE", "2")
+
+    db = MorphIndexManager(str(tmp_path / "morph_index.db"))
+    db.setup_db()
+
+    # Insert 5 morphs using the make_record pattern
+    from test_morph_index_manager import make_record
+    guids = []
+    for i in range(5):
+        guid = f"guid-{i}"
+        guids.append(guid)
+        db.insert_morph(make_record(guid=guid, label=f"Morph {i}"))
+
+    fake_chroma = MagicMock()
+
+    # Mock generate_embeddings to return embeddings for however many documents are passed
+    def mock_generate_embeddings(documents, is_query=False):
+        # Return a mock with tolist() that returns embeddings matching document count
+        mock_embeddings = MagicMock()
+        mock_embeddings.tolist.return_value = [[0.1 + j * 0.01] * 1024 for j in range(len(documents))]
+        return mock_embeddings
+
+    with patch("managers.morph_transpiler.generate_embeddings", side_effect=mock_generate_embeddings):
+        count = embed_and_store_morphs(db, fake_chroma, guids)
+
+    # Total count should be 5 (all guids embedded)
+    assert count == 5
+
+    # upsert should be called 3 times (batch 1: 2, batch 2: 2, batch 3: 1)
+    assert fake_chroma.collection.upsert.call_count == 3
+
+    # Verify the batches were correctly sized
+    calls = fake_chroma.collection.upsert.call_args_list
+    batch_sizes = [len(call.kwargs["ids"]) for call in calls]
+    assert batch_sizes == [2, 2, 1], f"Expected batch sizes [2, 2, 1], got {batch_sizes}"
+
+    # Verify all guids appear in the upserts (across all batches)
+    all_upserted_ids = []
+    for call in calls:
+        all_upserted_ids.extend(call.kwargs["ids"])
+    assert sorted(all_upserted_ids) == sorted(guids)
