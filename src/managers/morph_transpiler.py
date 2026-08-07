@@ -41,16 +41,16 @@ def index_library(library_root: str, tmb_output_dir: str, morph_index_manager, f
             try:
                 content_hash = compute_content_hash(source_path)
 
+                if not force:
+                    existing_hash = morph_index_manager.get_content_hash_by_source_path(source_path)
+                    if existing_hash == content_hash:
+                        summary["skipped_unchanged"] += 1
+                        continue
+
                 parsed = parse_dsf_file(source_path)
                 if parsed is None:
                     summary["skipped_no_deltas"] += 1
                     continue
-
-                if not force:
-                    existing_hash = morph_index_manager.get_content_hash(parsed.guid)
-                    if existing_hash == content_hash:
-                        summary["skipped_unchanged"] += 1
-                        continue
 
                 rel_path = os.path.relpath(source_path, library_root)
                 tmb_rel_path = os.path.splitext(rel_path)[0] + ".tmb"

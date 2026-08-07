@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS morph_dependencies (
 CREATE INDEX IF NOT EXISTS idx_target_figure ON morphs(target_figure);
 CREATE INDEX IF NOT EXISTS idx_dep_dependent ON morph_dependencies(dependent_morph_id);
 CREATE INDEX IF NOT EXISTS idx_dep_referenced ON morph_dependencies(referenced_morph_id);
+CREATE INDEX IF NOT EXISTS idx_source_dsf_path ON morphs(source_dsf_path);
 """
 
 _UPSERT_MORPH = """
@@ -84,6 +85,14 @@ class MorphIndexManager:
     def get_content_hash(self, guid: str):
         conn = self.get_connection()
         row = conn.execute("SELECT content_hash FROM morphs WHERE guid = ?", (guid,)).fetchone()
+        conn.close()
+        return row["content_hash"] if row else None
+
+    def get_content_hash_by_source_path(self, source_dsf_path: str):
+        conn = self.get_connection()
+        row = conn.execute(
+            "SELECT content_hash FROM morphs WHERE source_dsf_path = ?", (source_dsf_path,)
+        ).fetchone()
         conn.close()
         return row["content_hash"] if row else None
 
