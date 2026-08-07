@@ -21,9 +21,41 @@ import uvicorn
 
 from managers.managers import chroma_db_manager, sqlite_db
 
+
+def _ensure_utf8_console_output() -> None:
+    """Force stdout/stderr into UTF-8 mode before rendering rich.Progress bars.
+
+    On Windows terminals running the legacy cp1252 codepage (the *default* on
+    many Windows setups, not an edge case), rich's Progress/SpinnerColumn write
+    Unicode characters (braille spinner glyphs, block-drawing bar characters,
+    etc.) that cp1252 cannot encode. rich's legacy Windows console renderer
+    doesn't handle the resulting UnicodeEncodeError gracefully, so
+    Progress.__exit__ crashes during cleanup -- even after the underlying work
+    has already completed successfully.
+
+    Reconfiguring the streams to UTF-8 (an encoding that can represent every
+    Unicode character) eliminates the failure at its source, without requiring
+    the user to change any terminal/environment setting. ``errors="replace"``
+    is a belt-and-suspenders fallback in case the reconfigured stream is later
+    wrapped by something with a narrower encoding.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            # Stream doesn't support reconfiguration (e.g. already detached,
+            # or a non-standard stream substituted in tests); nothing to do.
+            pass
+
+
 def load_command(args):
     """Loads data from DAZ Postgres to SQLite and ChromaDB."""
     from managers.postgres_db_manager import main as load_dazdb_content
+
+    _ensure_utf8_console_output()
 
     with Progress(
         SpinnerColumn(),
@@ -75,6 +107,8 @@ def morphs_index_command(args):
     morph_db_path = os.environ.get("MORPH_INDEX_DB_PATH", "morph_index.db")
     tmb_output_dir = os.environ.get("MORPH_CACHE_PATH", "morph_cache")
     chroma_path = os.environ.get("CHROMA_PATH", "chroma_db")
+
+    _ensure_utf8_console_output()
 
     morph_index_manager = MorphIndexManager(morph_db_path)
     chroma_manager = ChromaDbManager(chroma_path, "morphs")
