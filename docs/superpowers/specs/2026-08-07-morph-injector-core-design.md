@@ -1,6 +1,6 @@
 # Design: C++ Daz Studio SDK Injector Core (JIT Binary Morph Loader — Subsystem B)
 
-**Status:** Draft — architecture proposal, pending an SDK header spike (see §4)
+**Status:** Draft — architecture proposal. Real-library formula-operator-vocabulary scan complete (§3.1); pending an SDK header spike to resolve the scene-attachment strategy (§4).
 **Parent spec:** `docs/superpowers/specs/2026-08-06-jit-morph-loader-parent-spec.md` — JIT Binary Morph Loader & Semantic Asset Manager (Option 3 Architecture), v1.0
 **Scope:** This document covers only Subsystem B (the C++ native plugin core that injects morphs and their ERC formula dependencies into a live Daz Studio scene). Subsystem A (Python offline ingest) is done — see `2026-08-06-morph-ingest-transpiler-design.md`. Subsystems C (scene lifecycle / manifest persistence) and D (Qt search UI / ChromaDB bridge) are out of scope here and get their own specs once Subsystem B's core injection API exists to build against.
 
@@ -102,11 +102,42 @@ morph_index.db ──▶  MorphIndexReader                                     �
       virtual ~IPropertySource() = default;
       virtual double resolve(const std::string& operand) = 0;
   };
+
+  // A stack cell is either a scalar or a small control-point array (spline
+  // operators push arrays, not just numbers -- see the real-library scan
+  // below). No heap allocation needed: the largest observed array is 5
+  // floats, so a fixed-capacity inline variant covers every case seen.
+  struct StackValue {
+      double scalar;
+      std::array<double, 5> array;
+      uint8_t array_len;   // 0 => scalar, else array of this length
+  };
+
   double evaluateFormula(const std::string& formulas_json, IPropertySource& source);
   ```
-  No Daz SDK types appear anywhere in this class — it is pure stack-machine evaluation over `push`/`val`/`url` operations, fully unit-testable with a fake `IPropertySource`.
+  No Daz SDK types appear anywhere in this class — it is pure stack-machine evaluation, fully unit-testable with a fake `IPropertySource`.
 
-  **Open scope question, not resolved by this doc:** Subsystem A's fixture sample (2 real `.dsf` files) only exercised `push` (url and literal-val forms) and `mult`. The parent spec doesn't enumerate the full DSON formula operator vocabulary (likely also includes at minimum `add`, `sub`, `div`, and spline/clamp-style operators for smoothed ERC curves — real DAZ content is known to use these, but none were observed in Subsystem A's small fixture set). **Before `FormulaEvaluator` is implemented, Subsystem B's implementation plan needs a scan of `formulas_json` values across the real ~321K-file library's already-ingested `morph_index.db`** (`SELECT DISTINCT json_extract(...) ...` over the `op` fields) to enumerate the actual operator vocabulary in use, rather than guessing from two fixtures. This is a cheap, no-new-code prerequisite task (can be done with a one-off Python script against the existing SQLite file) and should be the first task in Subsystem B's implementation plan, run before `FormulaEvaluator`'s design is finalized in code.
+  **Real-library operator vocabulary scan — done.** Subsystem A's own fixture sample (2 `.dsf` files) only exercised `push` and `mult`, which was too small to design an evaluator against. This design pass ran a full scan over the real, already-ingested `morph_index.db` (188,906 morphs, 23,596 with `formulas_json`, 0 malformed) and found the **complete, closed operator vocabulary is just five operators** — no `add`/`sub`/`div`/`clamp` appear anywhere in the real library:
+
+  | op | occurrences | notes |
+  |---|---|---|
+  | `push` | 1,928,000 | `url` form (968,725) or `val` form (959,275) |
+  | `mult` | 956,392 | binary: pops 2, pushes 1 |
+  | `spline_tcb` | 732 | see below |
+  | `spline_linear` | 83 | see below |
+  | `neg` | 26 | unary: pops 1, pushes 1 |
+
+  `push:val` is **not always a scalar** — of the 959,275 `val` pushes, 957,207 are plain numbers (float/int) but 2,068 push a small fixed-size array: `[5]`-element arrays (1,847 occurrences) and `[2]`-element arrays (221 occurrences). These are spline control points feeding a following `spline_tcb`/`spline_linear` op, e.g. a real fixture (`body_cbs_foot_Back_l.dsf`):
+  ```json
+  { "op": "push", "url": "Genesis9/l_foot:.../Genesis9.dsf#l_foot?rotation/x" },
+  { "op": "push", "val": [27.6, 0, 0, 0, 0] },
+  { "op": "push", "val": [65, 1, 0, 0, 0] },
+  { "op": "push", "val": 2 },
+  { "op": "spline_tcb" }
+  ```
+  i.e. `spline_tcb` pops a control-point count, N control-point arrays, and an input value, and evaluates a TCB (Kochanek–Bartels) spline through those control points at the input value — the input is a live bone-rotation property, and the spline is the ERC curve shape. This is why `StackValue` above must carry an array variant, not just a `double`: a purely-scalar stack cannot represent this operator's operands. `spline_linear` presumably differs only in interpolation method between control points (linear vs. TCB tangent-based); exact semantics of both need confirmation against the Daz Studio SDK's own spline evaluation (or DSON spec) when `FormulaEvaluator` is implemented, since this scan can confirm operator *shape* from the JSON but not verify evaluation *semantics* — that's an implementation-time correctness check (unit tests comparing against Daz Studio's own rendered result for a known control-point set), not something resolvable from static analysis of `morph_index.db` alone.
+
+  This scan is complete and this section's operator table should be treated as closed against this library snapshot — but re-run it (one-off query, no new code needed) if `morph_index.db` is rebuilt against a substantially different or newer content library before implementing `FormulaEvaluator`, since a closed vocabulary from one snapshot isn't a guarantee against all possible DAZ content.
 
 ### 3.2 SDK-dependent layer (`daz_plugin` target)
 
@@ -183,4 +214,4 @@ Carried forward verbatim from the parent spec §8 as binding constraints on `daz
 - Subsystem C (scene lifecycle hooks — `aboutToLoadScene`/`sceneLoaded`, the custom `DzCustomData` manifest for fast scene reopen).
 - Subsystem D (Qt dockable search panel, ChromaDB IPC bridge).
 - Resolving §4's native-vs-custom-operator question — explicitly deferred to a dedicated SDK header spike, which becomes the first task of Subsystem B's implementation plan.
-- Enumerating the full DSON formula operator vocabulary beyond `push`/`val`/`mult` — deferred to the real-library `formulas_json` scan called out in §3.1, another prerequisite task for the implementation plan rather than something this design doc guesses at.
+- Verifying `spline_tcb`/`spline_linear` evaluation *semantics* (the operator vocabulary itself is closed and confirmed — see §3.1's real-library scan) — deferred to implementation-time unit tests that check evaluated output against Daz Studio's own rendered result for a known control-point set, since static analysis of `morph_index.db` can confirm operand shape but not evaluation correctness.
