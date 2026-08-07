@@ -93,12 +93,12 @@ def index_library(library_root: str, tmb_output_dir: str, morph_index_manager, f
                 summary["ingested"] += 1
                 summary["new_guids"].append(parsed.guid)
 
-                if on_progress and summary["scanned"] % 500 == 0:
-                    on_progress("scan", summary["scanned"], None, source_path)
-
             except Exception:
                 logger.warning(f"Failed to ingest {source_path!r}, skipping.", exc_info=True)
                 summary["errors"] += 1
+
+            if on_progress and summary["scanned"] % 500 == 0:
+                on_progress("scan", summary["scanned"], None, source_path)
 
     edge_count = morph_index_manager.rebuild_dependencies(extract_referenced_guids)
     logger.info(f"Rebuilt dependency graph: {edge_count} edges.")
