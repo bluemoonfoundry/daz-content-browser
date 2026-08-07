@@ -5,9 +5,9 @@ morph.deltas.values block are ingestible morphs (see design doc section 6);
 everything else returns None.
 """
 
-import gzip
 import json
 import os
+import zlib
 from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import unquote
@@ -19,14 +19,24 @@ def _read_dsf_text(path: str) -> str:
     """Reads a .dsf file's JSON text, transparently decompressing if it's
     gzip-compressed. DAZ .dsf files may be gzip-compressed with no ".gz"
     suffix on the filename, so compression is detected via magic bytes.
+
+    Decompresses via zlib.decompressobj rather than the stdlib gzip module:
+    gzip's high-level reader treats concatenated data as multistream input
+    and tries to parse anything after the first member as a second gzip
+    header. Some vendor-exported .dsf files have trailing padding bytes
+    after the real gzip stream (observed: trailing spaces), which isn't a
+    valid header and makes gzip.open() raise BadGzipFile even though the
+    real payload decompressed fine. zlib.decompressobj stops cleanly at the
+    first member's end (`eof`) and reports any trailing bytes as
+    `unused_data`, which we simply discard.
     """
     with open(path, "rb") as f:
-        head = f.read(2)
-    if head == _GZIP_MAGIC:
-        with gzip.open(path, "rt", encoding="utf-8") as f:
-            return f.read()
-    with open(path, "r", encoding="utf-8") as f:
-        return f.read()
+        raw = f.read()
+    if raw[:2] == _GZIP_MAGIC:
+        decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        raw = decompressor.decompress(raw)
+        return raw.decode("utf-8")
+    return raw.decode("utf-8")
 
 
 @dataclass

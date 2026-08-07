@@ -41,6 +41,28 @@ def test_parses_gzip_compressed_morph(tmp_path):
     assert len(result.deltas) == 18503
 
 
+def test_parses_gzip_compressed_morph_with_trailing_padding_bytes(tmp_path):
+    # Some vendors export .dsf files with trailing padding (observed: space
+    # bytes) appended after the valid gzip stream ends. Python's high-level
+    # gzip.open() treats concatenated gzip data as multistream and tries to
+    # parse the padding as a second member's header, raising BadGzipFile.
+    # Confirmed against a real file: DAZ 3D/Genesis 3/Female/Morphs/3DArena/
+    # 3DA Nails Square.dsf (19 trailing space bytes after the real stream).
+    gz_path = tmp_path / "Billow.dsf"
+    with open(os.path.join(FIXTURES, "Billow.dsf"), "rb") as src:
+        raw = src.read()
+    compressed = gzip.compress(raw)
+    with open(gz_path, "wb") as dst:
+        dst.write(compressed)
+        dst.write(b"                   ")  # 19 trailing space bytes, as observed
+
+    result = parse_dsf_file(str(gz_path))
+    assert result is not None
+    assert result.name == "Billow"
+    assert result.vertex_count == 23369
+    assert len(result.deltas) == 18503
+
+
 def test_parses_jcm_with_bone_driven_formula():
     result = parse_dsf_file(os.path.join(FIXTURES, "pJCMCloakBend_m90.dsf"))
     assert result is not None
