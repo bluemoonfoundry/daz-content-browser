@@ -99,6 +99,41 @@ def test_get_content_hash_by_source_path_returns_none_for_unknown_path(manager):
     assert manager.get_content_hash_by_source_path(r"X:\lib\data\nope.dsf") is None
 
 
+def test_rebuild_dependencies_scopes_name_marker_to_dependent_target_figure(manager):
+    # Two different figures each have a same-named morph (e.g. pJCMThighBend_35
+    # exists on both Genesis 8 and Genesis 9). A "name:" marker on a formula
+    # belonging to a Genesis8Female morph must resolve to the Genesis8Female
+    # sibling, not the same-named Genesis9Female one.
+    manager.insert_morph(make_record(
+        guid="g8-parent", name="pJCMParent", target_figure="Genesis8Female",
+        formulas_json='[{"op": "noop"}]',
+    ))
+    manager.insert_morph(make_record(
+        guid="g8-child", name="pJCMShared", target_figure="Genesis8Female",
+    ))
+    manager.insert_morph(make_record(
+        guid="g9-child", name="pJCMShared", target_figure="Genesis9Female",
+    ))
+
+    def fake_extract(formulas_json):
+        if formulas_json == '[{"op": "noop"}]':
+            return ["name:pJCMShared"]
+        return []
+
+    count = manager.rebuild_dependencies(fake_extract)
+    assert count == 1
+
+    conn = manager.get_connection()
+    row = conn.execute(
+        "SELECT referenced_morph_id FROM morph_dependencies"
+    ).fetchone()
+    resolved_guid = conn.execute(
+        "SELECT guid FROM morphs WHERE morph_id = ?", (row["referenced_morph_id"],)
+    ).fetchone()["guid"]
+    conn.close()
+    assert resolved_guid == "g8-child"
+
+
 def test_get_content_hash_by_source_path_returns_stored_value(manager):
     manager.insert_morph(make_record(source_dsf_path=r"X:\lib\data\Billow.dsf", content_hash="abc123"))
     assert manager.get_content_hash_by_source_path(r"X:\lib\data\Billow.dsf") == "abc123"
