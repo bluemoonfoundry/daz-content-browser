@@ -134,8 +134,18 @@ def morphs_index_command(args):
                 progress.update(embed_task, visible=True, total=total, completed=current, description="Embedding ")
 
         summary = index_library(library_path, tmb_output_dir, morph_index_manager, force=args.force, on_progress=on_progress)
+
+        # Embed every SQLite morph missing from Chroma, not just this run's
+        # new_guids -- self-heals morphs left un-embedded by an interrupted
+        # prior run (embedding only ever happens once, at the end of a full
+        # walk, so a killed process strands its ingested-but-not-yet-embedded
+        # morphs otherwise; content-hash matching then skips them forever).
+        all_guids = set(morph_index_manager.get_all_guids())
+        already_embedded = chroma_manager.get_all_ids()
+        guids_to_embed = list(all_guids - already_embedded)
+
         embedded_count, failed_guids = embed_and_store_morphs(
-            morph_index_manager, chroma_manager, summary["new_guids"], on_progress=on_progress
+            morph_index_manager, chroma_manager, guids_to_embed, on_progress=on_progress
         )
 
     if failed_guids:

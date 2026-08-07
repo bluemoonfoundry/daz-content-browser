@@ -114,6 +114,12 @@ class MorphIndexManager:
         conn.close()
         return row["morph_id"] if row else None
 
+    def get_all_guids(self) -> list:
+        conn = self.get_connection()
+        rows = conn.execute("SELECT guid FROM morphs").fetchall()
+        conn.close()
+        return [row["guid"] for row in rows]
+
     def get_morphs_by_guids(self, guids: list):
         if not guids:
             return []

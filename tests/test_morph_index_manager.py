@@ -59,6 +59,17 @@ def test_get_morphs_by_guids(manager):
     assert sorted(r["guid"] for r in rows) == ["a", "c"]
 
 
+def test_get_all_guids(manager):
+    manager.insert_morph(make_record(guid="a"))
+    manager.insert_morph(make_record(guid="b"))
+    manager.insert_morph(make_record(guid="c"))
+    assert sorted(manager.get_all_guids()) == ["a", "b", "c"]
+
+
+def test_get_all_guids_returns_empty_list_for_empty_table(manager):
+    assert manager.get_all_guids() == []
+
+
 def test_rebuild_dependencies(manager):
     manager.insert_morph(make_record(guid="parent-guid", formulas_json='[{"op": "noop"}]'))
     manager.insert_morph(make_record(guid="child-guid"))
