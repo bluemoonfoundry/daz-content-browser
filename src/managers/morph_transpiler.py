@@ -31,6 +31,11 @@ def index_library(library_root: str, tmb_output_dir: str, morph_index_manager, f
     }
 
     data_root = os.path.join(library_root, "data")
+    if not os.path.isdir(data_root):
+        raise FileNotFoundError(
+            f"No 'data' directory found under library root: {library_root!r} (expected {data_root!r})"
+        )
+
     for dirpath, _dirnames, filenames in os.walk(data_root):
         for filename in filenames:
             if not filename.lower().endswith(".dsf"):

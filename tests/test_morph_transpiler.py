@@ -87,6 +87,18 @@ def test_index_library_skips_bad_json_without_aborting(library, tmp_path):
     assert summary["ingested"] == 2  # the two good files still succeed
 
 
+def test_index_library_raises_for_missing_data_dir(tmp_path):
+    lib_root = tmp_path / "not_a_real_library"
+    lib_root.mkdir()  # exists, but has no "data" subdirectory
+
+    db = MorphIndexManager(str(tmp_path / "morph_index.db"))
+    db.setup_db()
+    tmb_dir = str(tmp_path / "morph_cache")
+
+    with pytest.raises(FileNotFoundError):
+        index_library(str(lib_root), tmb_dir, db)
+
+
 def test_index_library_rebuilds_dependencies(library, tmp_path):
     db = MorphIndexManager(str(tmp_path / "morph_index.db"))
     db.setup_db()
