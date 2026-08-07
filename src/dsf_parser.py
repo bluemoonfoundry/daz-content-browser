@@ -80,10 +80,20 @@ def parse_dsf_file(path: str) -> Optional[ParsedMorph]:
 
 
 def extract_referenced_guids(formulas_json: str | None) -> list[str]:
-    """Extracts raw path strings from "push url" operations in a formulas_json
-    blob. These are candidate morph guids -- callers (the SQLite dependency
-    rebuild) are responsible for checking which ones resolve to an indexed
-    morph; non-morph targets (e.g. bone rotations) simply won't match.
+    """Extracts candidate reference strings from "push url" operations in a
+    formulas_json blob. These are candidate morph guids -- callers (the
+    SQLite dependency rebuild) are responsible for checking which ones
+    resolve to an indexed morph; non-morph targets (e.g. bone rotations)
+    simply won't match.
+
+    Each entry is either:
+      - a raw path (path-form operand, e.g. "Label:/data/.../Target.dsf#Node?property"
+        -> "/data/.../Target.dsf"), or
+      - a synthetic "name:<PropertyName>" marker for the pathless form that
+        DAZ formulas overwhelmingly use in practice (e.g.
+        "Fig:#pJCMSomething?value" -> "name:pJCMSomething"), which the
+        caller resolves by matching against the morph `name` column instead
+        of `guid`.
     """
     if not formulas_json:
         return []
@@ -95,8 +105,15 @@ def extract_referenced_guids(formulas_json: str | None) -> list[str]:
             url = op.get("url")
             if not url:
                 continue
-            # url looks like "Label:/data/.../Target.dsf#Node?property"
+            # url looks like "Label:/data/.../Target.dsf#Node?property" or,
+            # far more commonly, the pathless "Label:#PropertyName?value".
             after_label = url.split(":", 1)[-1] if ":" in url else url
-            path = after_label.split("#", 1)[0]
-            refs.append(path)
+            if "#" not in after_label:
+                continue
+            path, fragment = after_label.split("#", 1)
+            if path:
+                refs.append(path)
+            else:
+                name = fragment.split("?", 1)[0]
+                refs.append(f"name:{name}")
     return refs

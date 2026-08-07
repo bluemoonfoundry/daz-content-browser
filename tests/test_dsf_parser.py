@@ -80,3 +80,18 @@ def test_extract_referenced_guids_handles_multiple_operations_and_formulas():
 
 def test_extract_referenced_guids_returns_empty_list_for_none():
     assert extract_referenced_guids(None) == []
+
+
+def test_extract_referenced_guids_handles_pathless_name_form():
+    # The dominant real-world DAZ formula operand shape: no /data/... path,
+    # just a figure label and a property/channel name after "#".
+    formulas_json = json.dumps([
+        {
+            "output": "Fig:#pJCMSomething?value",
+            "operations": [
+                {"op": "push", "url": "Fig:#pJCMSomething?value"},
+            ],
+        },
+    ])
+    refs = extract_referenced_guids(formulas_json)
+    assert refs == ["name:pJCMSomething"]

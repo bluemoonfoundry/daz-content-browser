@@ -75,6 +75,35 @@ def test_rebuild_dependencies(manager):
     assert stats["dependency_count"] == 1
 
 
+def test_rebuild_dependencies_resolves_name_marker(manager):
+    # A formula referencing another morph via the pathless "name:" marker
+    # form should resolve to a real edge when a morph with that `name`
+    # exists in the table.
+    manager.insert_morph(make_record(
+        guid="parent-guid", name="pJCMParent",
+        formulas_json='[{"op": "noop"}]',
+    ))
+    manager.insert_morph(make_record(guid="child-guid", name="pJCMChild"))
+
+    def fake_extract(formulas_json):
+        if formulas_json == '[{"op": "noop"}]':
+            return ["name:pJCMChild"]
+        return []
+
+    count = manager.rebuild_dependencies(fake_extract)
+    assert count == 1
+    assert manager.get_stats()["dependency_count"] == 1
+
+
+def test_get_content_hash_by_source_path_returns_none_for_unknown_path(manager):
+    assert manager.get_content_hash_by_source_path(r"X:\lib\data\nope.dsf") is None
+
+
+def test_get_content_hash_by_source_path_returns_stored_value(manager):
+    manager.insert_morph(make_record(source_dsf_path=r"X:\lib\data\Billow.dsf", content_hash="abc123"))
+    assert manager.get_content_hash_by_source_path(r"X:\lib\data\Billow.dsf") == "abc123"
+
+
 def test_setup_db_force_reset_wipes_existing_data(tmp_path):
     db_path = str(tmp_path / "morph_index.db")
     mgr = MorphIndexManager(db_path)

@@ -119,13 +119,17 @@ class MorphIndexManager:
     def rebuild_dependencies(self, extract_referenced_guids_fn) -> int:
         conn = self.get_connection()
         conn.execute("DELETE FROM morph_dependencies")
-        rows = conn.execute("SELECT morph_id, guid, formulas_json FROM morphs").fetchall()
+        rows = conn.execute("SELECT morph_id, guid, name, formulas_json FROM morphs").fetchall()
         guid_to_id = {row["guid"]: row["morph_id"] for row in rows}
+        name_to_id = {row["name"]: row["morph_id"] for row in rows}
 
         inserted = 0
         for row in rows:
-            for ref_guid in extract_referenced_guids_fn(row["formulas_json"]):
-                referenced_id = guid_to_id.get(ref_guid)
+            for ref in extract_referenced_guids_fn(row["formulas_json"]):
+                if ref.startswith("name:"):
+                    referenced_id = name_to_id.get(ref[len("name:"):])
+                else:
+                    referenced_id = guid_to_id.get(ref)
                 if referenced_id is None:
                     continue
                 conn.execute(
