@@ -2,10 +2,8 @@ import os
 import shutil
 from unittest.mock import MagicMock, patch
 
-import pytest
 from managers.morph_index_manager import MorphIndexManager
 from managers.morph_transpiler import index_library, embed_and_store_morphs
-from tmb_format import read_tmb
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "dsf")
 

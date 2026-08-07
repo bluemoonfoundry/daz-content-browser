@@ -1,4 +1,5 @@
 import struct
+
 import pytest
 from tmb_format import write_tmb, read_tmb
 
@@ -39,3 +40,23 @@ def test_header_is_16_bytes_and_delta_is_16_bytes(tmp_path):
     write_tmb(str(path), vertex_count=5, deltas=[(1, 1.0, 2.0, 3.0)])
     data = path.read_bytes()
     assert len(data) == 16 + 16
+
+
+def test_read_rejects_file_under_16_bytes(tmp_path):
+    """A .tmb file shorter than the 16-byte header should raise ValueError."""
+    path = tmp_path / "short.tmb"
+    path.write_bytes(b"TMB1" + b"\x00" * 10)  # Only 14 bytes total
+    with pytest.raises(ValueError, match="header too short"):
+        read_tmb(str(path))
+
+
+def test_read_rejects_truncated_deltas(tmp_path):
+    """A .tmb file with a header claiming more deltas than the file contains."""
+    path = tmp_path / "truncated.tmb"
+    # Write a valid 16-byte header claiming 2 deltas, but provide only 1 delta
+    # (or incomplete delta data).
+    header_data = struct.pack("<4sII4x", b"TMB1", 100, 2)  # vertex_count=100, delta_count=2
+    one_delta = struct.pack("<Ifff", 0, 1.0, 2.0, 3.0)
+    path.write_bytes(header_data + one_delta)  # Only 16 + 16 = 32 bytes total
+    with pytest.raises(ValueError, match="Truncated|too short"):
+        read_tmb(str(path))
