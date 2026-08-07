@@ -2,6 +2,7 @@ import argparse
 import json
 import logging
 import os
+import shutil
 import sys
 
 from rich.progress import (
@@ -73,6 +74,7 @@ def morphs_index_command(args):
     chroma_manager = ChromaDbManager(chroma_path, "morphs")
     if args.force:
         chroma_manager.reset_collection()
+        shutil.rmtree(tmb_output_dir, ignore_errors=True)
 
     with Progress(
         SpinnerColumn(),
