@@ -5,11 +5,28 @@ morph.deltas.values block are ingestible morphs (see design doc section 6);
 everything else returns None.
 """
 
+import gzip
 import json
 import os
 from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import unquote
+
+_GZIP_MAGIC = b"\x1f\x8b"
+
+
+def _read_dsf_text(path: str) -> str:
+    """Reads a .dsf file's JSON text, transparently decompressing if it's
+    gzip-compressed. DAZ .dsf files may be gzip-compressed with no ".gz"
+    suffix on the filename, so compression is detected via magic bytes.
+    """
+    with open(path, "rb") as f:
+        head = f.read(2)
+    if head == _GZIP_MAGIC:
+        with gzip.open(path, "rt", encoding="utf-8") as f:
+            return f.read()
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
 
 
 @dataclass
@@ -40,8 +57,7 @@ def _resolve_target_figure(parent_url: Optional[str]) -> Optional[str]:
 
 
 def parse_dsf_file(path: str) -> Optional[ParsedMorph]:
-    with open(path, "r", encoding="utf-8") as f:
-        doc = json.load(f)
+    doc = json.loads(_read_dsf_text(path))
 
     asset_info = doc.get("asset_info", {})
     if asset_info.get("type") != "modifier":

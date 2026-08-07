@@ -1,3 +1,4 @@
+import gzip
 import json
 import os
 
@@ -20,6 +21,24 @@ def test_parses_plain_morph():
     assert result.is_clamped is True
     assert result.formulas_json is None
     assert result.guid  # asset_info.id, non-empty
+
+
+def test_parses_gzip_compressed_morph(tmp_path):
+    # Real DAZ .dsf files are frequently gzip-compressed despite the plain
+    # ".dsf" extension (no ".gz" suffix) -- detected via magic bytes, not
+    # naming. Confirmed against ~37% of a random sample of the user's real
+    # library. Build a compressed copy of the real Billow.dsf fixture.
+    gz_path = tmp_path / "Billow.dsf"
+    with open(os.path.join(FIXTURES, "Billow.dsf"), "rb") as src:
+        raw = src.read()
+    with gzip.open(gz_path, "wb") as dst:
+        dst.write(raw)
+
+    result = parse_dsf_file(str(gz_path))
+    assert result is not None
+    assert result.name == "Billow"
+    assert result.vertex_count == 23369
+    assert len(result.deltas) == 18503
 
 
 def test_parses_jcm_with_bone_driven_formula():
