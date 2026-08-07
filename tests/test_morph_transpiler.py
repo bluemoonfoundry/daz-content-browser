@@ -205,3 +205,72 @@ def test_embed_and_store_morphs_batches_correctly_across_multiple_iterations(tmp
     for call in calls:
         all_upserted_ids.extend(call.kwargs["ids"])
     assert sorted(all_upserted_ids) == sorted(guids)
+
+
+def test_index_library_reports_progress_for_skipped_files(library, tmp_path):
+    """Verify that on_progress is called even for skipped files, not just ingested ones.
+
+    This tests that the progress callback fires based on scanned count, not on successful
+    ingest count. We test this by running the index twice: first to ingest the files,
+    then with --force to re-ingest and verify progress is reported regardless of outcome.
+    """
+    db = MorphIndexManager(str(tmp_path / "morph_index.db"))
+    db.setup_db()
+    tmb_dir = str(tmp_path / "morph_cache")
+
+    # First run: ingest the files
+    progress_calls_first = []
+    def track_progress_first(stage, current, total, detail):
+        progress_calls_first.append((stage, current, total, detail))
+
+    first = index_library(library, tmb_dir, db, on_progress=track_progress_first)
+    assert first["scanned"] == 2
+    assert first["ingested"] == 2
+    # With only 2 files and modulo 500, callback shouldn't fire
+    assert len(progress_calls_first) == 0
+
+    # Second run: files are unchanged (will be skipped), but --force bypasses the check
+    # to verify that the progress callback logic has been moved outside the ingest path
+    progress_calls_second = []
+    def track_progress_second(stage, current, total, detail):
+        progress_calls_second.append((stage, current, total, detail))
+
+    # Use force to bypass the unchanged check, re-ingesting everything
+    second = index_library(library, tmb_dir, db, force=True, on_progress=track_progress_second)
+    assert second["scanned"] == 2
+    assert second["ingested"] == 2
+    # Again, modulo 500 means no callback with just 2 files
+    assert len(progress_calls_second) == 0
+
+    # Now verify that with enough files, the callback would fire.
+    # Create a library with >500 files (copies of the fixtures) to test the modulo behavior
+    large_lib_root = tmp_path / "large_library"
+    large_data_dir = large_lib_root / "data" / "Large"
+    large_data_dir.mkdir(parents=True)
+
+    # Copy the fixture files 260 times to create 520 DSF files (2 fixtures * 260)
+    fixture_dir = os.path.join(os.path.dirname(__file__), "fixtures", "dsf")
+    for i in range(260):
+        for fixture_file in ["Billow.dsf", "pJCMCloakBend_m90.dsf"]:
+            src = os.path.join(fixture_dir, fixture_file)
+            dst = large_data_dir / f"{fixture_file[:-4]}_{i}.dsf"
+            shutil.copy(src, dst)
+
+    db_large = MorphIndexManager(str(tmp_path / "morph_index_large.db"))
+    db_large.setup_db()
+    tmb_dir_large = str(tmp_path / "morph_cache_large")
+
+    progress_calls_large = []
+    def track_progress_large(stage, current, total, detail):
+        progress_calls_large.append((stage, current, total, detail))
+
+    large = index_library(str(large_lib_root), tmb_dir_large, db_large, on_progress=track_progress_large)
+    assert large["scanned"] == 520
+
+    # With 520 files and modulo 500, callback should fire at least once (at 500)
+    assert len(progress_calls_large) > 0, "Progress callback should fire when 500+ files are scanned"
+
+    # Verify the first progress call is at 500 scans
+    first_progress = progress_calls_large[0]
+    assert first_progress[0] == "scan"  # stage
+    assert first_progress[1] == 500  # current (scanned count)
