@@ -1,15 +1,18 @@
 """Binary read/write for the .tmb (Turbo Morph Binary) format.
 
 Layout:
-  HEADER (16 bytes): magic b"TMB1" (4) | vertex_count uint32 (4) |
+  HEADER (16 bytes): magic b"TMB1" (4) | vertex_count int32 (4) |
                       delta_count uint32 (4) | reserved (4, zero)
   DATA: delta_count x { vertex_index uint32, dx float32, dy float32, dz float32 }
+
+vertex_count is signed: DAZ .dsf files legitimately use -1 as a documented
+DSON sentinel meaning "unspecified/same as base mesh".
 """
 
 import struct
 
 _MAGIC = b"TMB1"
-_HEADER = struct.Struct("<4sII4x")
+_HEADER = struct.Struct("<4siI4x")
 _DELTA = struct.Struct("<Ifff")
 
 
