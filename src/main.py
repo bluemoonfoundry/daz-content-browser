@@ -2,6 +2,7 @@ import argparse
 import json
 import logging
 import os
+import shutil
 import sys
 
 from rich.progress import (
@@ -53,6 +54,51 @@ def load_command(args):
                 )
 
         load_dazdb_content(args, on_progress=on_progress)
+
+def morphs_index_command(args):
+    """Indexes .dsf morph files from a DAZ library into morph_index.db, morph_cache/, and ChromaDB."""
+    from managers.morph_index_manager import MorphIndexManager
+    from managers.morph_transpiler import index_library, embed_and_store_morphs
+    from managers.chroma_db_manager import ChromaDbManager
+
+    library_path = args.library_path or os.environ.get("MORPH_LIBRARY_PATH")
+    if not library_path:
+        print("Error: --library-path is required (or set MORPH_LIBRARY_PATH).", file=sys.stderr)
+        sys.exit(1)
+
+    morph_db_path = os.environ.get("MORPH_INDEX_DB_PATH", "morph_index.db")
+    tmb_output_dir = os.environ.get("MORPH_CACHE_PATH", "morph_cache")
+    chroma_path = os.environ.get("CHROMA_PATH", "chroma_db")
+
+    morph_index_manager = MorphIndexManager(morph_db_path)
+    chroma_manager = ChromaDbManager(chroma_path, "morphs")
+    if args.force:
+        chroma_manager.reset_collection()
+        shutil.rmtree(tmb_output_dir, ignore_errors=True)
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold cyan]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TaskProgressColumn(),
+        TimeRemainingColumn(),
+    ) as progress:
+        scan_task = progress.add_task("Scanning  ", total=None)
+        embed_task = progress.add_task("Embedding ", total=None, visible=False)
+
+        def on_progress(stage, current, total, detail=""):
+            if stage == "scan":
+                progress.update(scan_task, completed=current, description=f"Scanning  {str(detail)[:35]:<35}")
+            elif stage == "embed":
+                progress.update(embed_task, visible=True, total=total, completed=current, description="Embedding ")
+
+        summary = index_library(library_path, tmb_output_dir, morph_index_manager, force=args.force, on_progress=on_progress)
+        embed_and_store_morphs(morph_index_manager, chroma_manager, summary["new_guids"], on_progress=on_progress)
+
+    print(f"Scanned: {summary['scanned']}, Ingested: {summary['ingested']}, "
+          f"Skipped (no deltas): {summary['skipped_no_deltas']}, "
+          f"Skipped (unchanged): {summary['skipped_unchanged']}, Errors: {summary['errors']}")
 
 def query_command(args):
     """Submits a query to the ChromaDB and prints the formatted results."""
@@ -145,8 +191,23 @@ def main():
             "openproduct",
             help="Open a named DAZ product in DAZ Studio's Content Library Pane",
         ),
-        
+
     }
+
+    morphs_parser = subparsers.add_parser("morphs", help="Morph library ingest commands.")
+    morphs_subparsers = morphs_parser.add_subparsers(dest="morphs_command", required=True)
+    morphs_index_parser = morphs_subparsers.add_parser(
+        "index", help="Index .dsf morph files into morph_index.db and ChromaDB."
+    )
+    morphs_index_parser.add_argument(
+        "--library-path", type=str, default=None,
+        help="Path to the DAZ content library root (containing data/). Falls back to MORPH_LIBRARY_PATH env var.",
+    )
+    morphs_index_parser.add_argument(
+        "--force", action="store_true",
+        help="Wipe morph_index.db, morph_cache/, and the morphs Chroma collection, then re-index everything.",
+    )
+    morphs_index_parser.set_defaults(func=morphs_index_command)
 
     parsers["query"].add_argument("prompt", help="The search prompt.")
     parsers["query"].add_argument(
