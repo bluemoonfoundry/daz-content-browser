@@ -61,6 +61,30 @@ def test_index_library_is_incremental_by_default(library, tmp_path):
     assert second["skipped_unchanged"] == 2
 
 
+def test_index_library_reingests_when_tmb_file_missing_despite_matching_hash(library, tmp_path):
+    db = MorphIndexManager(str(tmp_path / "morph_index.db"))
+    db.setup_db()
+    tmb_dir = str(tmp_path / "morph_cache")
+
+    first = index_library(library, tmb_dir, db)
+    assert first["ingested"] == 2
+
+    billow_tmb = os.path.join(tmb_dir, "data", "SomeVendor", "Billow.tmb")
+    assert os.path.exists(billow_tmb)
+    os.remove(billow_tmb)
+
+    second = index_library(library, tmb_dir, db)
+
+    # Only the missing-.tmb file should be re-ingested; the other stays skipped.
+    assert second["ingested"] == 1
+    assert second["skipped_unchanged"] == 1
+
+    assert os.path.exists(billow_tmb)
+    vertex_count, deltas = read_tmb(billow_tmb)
+    assert vertex_count == 23369
+    assert len(deltas) == 18503
+
+
 def test_index_library_force_reingests_everything(library, tmp_path):
     db = MorphIndexManager(str(tmp_path / "morph_index.db"))
     db.setup_db()
