@@ -480,6 +480,7 @@ python vab.py <command> --help   # per-command help
 |---|---|
 | `server` | Start the API server |
 | `load` | Build / update the search index from DAZ CMS |
+| `morphs index` | Index morph .dsf files from a DAZ content library |
 | `query` | Semantic search from the terminal |
 | `stats` | Print index summary and histograms |
 | `openproduct` | Open a product in DAZ Studio Content Library |
@@ -512,6 +513,14 @@ python vab.py stats
 ```bash
 python vab.py openproduct --product "dForce Night Runner Outfit"
 ```
+
+### `morphs index`
+```bash
+python vab.py morphs index --library-path "C:/Users/YourName/Documents/DAZ 3D/Studio/My Library" [--force]
+```
+
+Indexes .dsf morph files from a DAZ content library into the morph SQLite database and ChromaDB collection.
+Use `--force` to rebuild the entire index from scratch (wipes existing data).
 
 ---
 
