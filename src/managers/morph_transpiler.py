@@ -111,13 +111,14 @@ def _build_embedding_text(row) -> str:
     return f"{label}. Category: {group_path}." if group_path else f"{label}."
 
 
-def embed_and_store_morphs(morph_index_manager, chroma_manager, guids: list, on_progress=None) -> int:
+def embed_and_store_morphs(morph_index_manager, chroma_manager, guids: list, on_progress=None) -> tuple:
     if not guids:
-        return 0
+        return 0, []
 
     batch_size = int(os.getenv("BATCH_SIZE", "512"))
     total = len(guids)
     embedded = 0
+    failed_guids = []
 
     for i in range(0, total, batch_size):
         batch_guids = guids[i:i + batch_size]
@@ -152,10 +153,11 @@ def embed_and_store_morphs(morph_index_manager, chroma_manager, guids: list, on_
                 )
             except Exception as e2:
                 logger.error(f"Error publishing batch {i // batch_size + 1} to ChromaDB: {e2}")
+                failed_guids.extend(ids)
                 continue
         embedded += len(ids)
 
         if on_progress:
             on_progress("embed", min(i + batch_size, total), total, f"batch {i // batch_size + 1}")
 
-    return embedded
+    return embedded, failed_guids

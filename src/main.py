@@ -100,11 +100,23 @@ def morphs_index_command(args):
                 progress.update(embed_task, visible=True, total=total, completed=current, description="Embedding ")
 
         summary = index_library(library_path, tmb_output_dir, morph_index_manager, force=args.force, on_progress=on_progress)
-        embed_and_store_morphs(morph_index_manager, chroma_manager, summary["new_guids"], on_progress=on_progress)
+        embedded_count, failed_guids = embed_and_store_morphs(
+            morph_index_manager, chroma_manager, summary["new_guids"], on_progress=on_progress
+        )
+
+    if failed_guids:
+        preview = ", ".join(failed_guids[:5])
+        more = f" (showing first 5)" if len(failed_guids) > 5 else ""
+        print(
+            f"Warning: {len(failed_guids)} morph(s) failed to embed after retry and were not "
+            f"stored in ChromaDB: {preview}{more}",
+            file=sys.stderr,
+        )
 
     print(f"Scanned: {summary['scanned']}, Ingested: {summary['ingested']}, "
           f"Skipped (no deltas): {summary['skipped_no_deltas']}, "
-          f"Skipped (unchanged): {summary['skipped_unchanged']}, Errors: {summary['errors']}")
+          f"Skipped (unchanged): {summary['skipped_unchanged']}, Errors: {summary['errors']}, "
+          f"Embed failures: {len(failed_guids)}")
 
 def query_command(args):
     """Submits a query to the ChromaDB and prints the formatted results."""
