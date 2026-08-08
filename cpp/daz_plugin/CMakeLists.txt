@@ -40,6 +40,8 @@ endif()
 
 add_library(${DZ_PLUGIN_TGT_NAME} SHARED
     PluginMain.cpp
+    PropertySourceAdapter.cpp
+    FormulaControllerBuilder.cpp
     ${DZ_PLUGIN_OS_SOURCES}
 )
 

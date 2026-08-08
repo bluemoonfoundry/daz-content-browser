@@ -30,6 +30,20 @@ add_library(sqlite3_amalgamation STATIC
     ${sqlite_amalgamation_SOURCE_DIR}/sqlite3.c
 )
 target_include_directories(sqlite3_amalgamation PUBLIC ${sqlite_amalgamation_SOURCE_DIR})
+if(MSVC)
+    # Pin the CRT explicitly rather than relying on the project-wide
+    # CMAKE_MSVC_RUNTIME_LIBRARY (cpp/CMakeLists.txt): this target is created in
+    # the same scope as the FetchContent'd sqlite project, and in practice it
+    # comes out of generation with an *empty* RuntimeLibrary, i.e. cl.exe's
+    # default of /MT. Discovered in beads-2mw.6, the first task whose code
+    # actually references MorphIndexReader and so drags sqlite3.obj into the
+    # plugin DLL -- which then linked with `LNK4098: defaultlib 'LIBCMT'
+    # conflicts`, i.e. a static CRT mixed into a /MD DLL (two heaps; sqlite3
+    # allocations freed against the wrong one). Belt-and-braces: the property is
+    # the modern spelling, /MD is the guaranteed-effective flag.
+    set_property(TARGET sqlite3_amalgamation PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+    target_compile_options(sqlite3_amalgamation PRIVATE "/MD")
+endif()
 # Minimal, single-threaded-per-connection use from injector_core; keep the
 # amalgamation lean and avoid pulling in extension-loading/shared-cache surface.
 target_compile_definitions(sqlite3_amalgamation PUBLIC
