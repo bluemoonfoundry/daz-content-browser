@@ -68,6 +68,12 @@ vab load --force
 
 # Embed only — re-embeds products already in SQLite but missing from ChromaDB
 vab load --phase embed
+
+# Index morph library from DAZ content
+vab morphs index --library-path "C:/path/to/DAZ/library"
+
+# Re-index morphs from scratch
+vab morphs index --library-path "C:/path/to/DAZ/library" --force
 ```
 
 ## Architecture Overview

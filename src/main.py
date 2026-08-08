@@ -2,6 +2,7 @@ import argparse
 import json
 import logging
 import os
+import shutil
 import sys
 
 from rich.progress import (
@@ -20,9 +21,41 @@ import uvicorn
 
 from managers.managers import chroma_db_manager, sqlite_db
 
+
+def _ensure_utf8_console_output() -> None:
+    """Force stdout/stderr into UTF-8 mode before rendering rich.Progress bars.
+
+    On Windows terminals running the legacy cp1252 codepage (the *default* on
+    many Windows setups, not an edge case), rich's Progress/SpinnerColumn write
+    Unicode characters (braille spinner glyphs, block-drawing bar characters,
+    etc.) that cp1252 cannot encode. rich's legacy Windows console renderer
+    doesn't handle the resulting UnicodeEncodeError gracefully, so
+    Progress.__exit__ crashes during cleanup -- even after the underlying work
+    has already completed successfully.
+
+    Reconfiguring the streams to UTF-8 (an encoding that can represent every
+    Unicode character) eliminates the failure at its source, without requiring
+    the user to change any terminal/environment setting. ``errors="replace"``
+    is a belt-and-suspenders fallback in case the reconfigured stream is later
+    wrapped by something with a narrower encoding.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            # Stream doesn't support reconfiguration (e.g. already detached,
+            # or a non-standard stream substituted in tests); nothing to do.
+            pass
+
+
 def load_command(args):
     """Loads data from DAZ Postgres to SQLite and ChromaDB."""
     from managers.postgres_db_manager import main as load_dazdb_content
+
+    _ensure_utf8_console_output()
 
     with Progress(
         SpinnerColumn(),
@@ -53,6 +86,81 @@ def load_command(args):
                 )
 
         load_dazdb_content(args, on_progress=on_progress)
+
+def morphs_index_command(args):
+    """Indexes .dsf morph files from a DAZ library into morph_index.db, morph_cache/, and ChromaDB."""
+    from managers.morph_index_manager import MorphIndexManager
+    from managers.morph_transpiler import index_library, embed_and_store_morphs, validate_library_root
+    from managers.chroma_db_manager import ChromaDbManager
+
+    library_path = args.library_path or os.environ.get("MORPH_LIBRARY_PATH")
+    if not library_path:
+        print("Error: --library-path is required (or set MORPH_LIBRARY_PATH).", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        validate_library_root(library_path)
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    morph_db_path = os.environ.get("MORPH_INDEX_DB_PATH", "morph_index.db")
+    tmb_output_dir = os.environ.get("MORPH_CACHE_PATH", "morph_cache")
+    chroma_path = os.environ.get("CHROMA_PATH", "chroma_db")
+
+    _ensure_utf8_console_output()
+
+    morph_index_manager = MorphIndexManager(morph_db_path)
+    chroma_manager = ChromaDbManager(chroma_path, "morphs")
+    if args.force:
+        chroma_manager.reset_collection()
+        shutil.rmtree(tmb_output_dir, ignore_errors=True)
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold cyan]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TaskProgressColumn(),
+        TimeRemainingColumn(),
+    ) as progress:
+        scan_task = progress.add_task("Scanning  ", total=None)
+        embed_task = progress.add_task("Embedding ", total=None, visible=False)
+
+        def on_progress(stage, current, total, detail=""):
+            if stage == "scan":
+                progress.update(scan_task, completed=current, description=f"Scanning  {str(detail)[:35]:<35}")
+            elif stage == "embed":
+                progress.update(embed_task, visible=True, total=total, completed=current, description="Embedding ")
+
+        summary = index_library(library_path, tmb_output_dir, morph_index_manager, force=args.force, on_progress=on_progress)
+
+        # Embed every SQLite morph missing from Chroma, not just this run's
+        # new_guids -- self-heals morphs left un-embedded by an interrupted
+        # prior run (embedding only ever happens once, at the end of a full
+        # walk, so a killed process strands its ingested-but-not-yet-embedded
+        # morphs otherwise; content-hash matching then skips them forever).
+        all_guids = set(morph_index_manager.get_all_guids())
+        already_embedded = chroma_manager.get_all_ids()
+        guids_to_embed = list(all_guids - already_embedded)
+
+        embedded_count, failed_guids = embed_and_store_morphs(
+            morph_index_manager, chroma_manager, guids_to_embed, on_progress=on_progress
+        )
+
+    if failed_guids:
+        preview = ", ".join(failed_guids[:5])
+        more = f" (showing first 5)" if len(failed_guids) > 5 else ""
+        print(
+            f"Warning: {len(failed_guids)} morph(s) failed to embed after retry and were not "
+            f"stored in ChromaDB: {preview}{more}",
+            file=sys.stderr,
+        )
+
+    print(f"Scanned: {summary['scanned']}, Ingested: {summary['ingested']}, "
+          f"Skipped (no deltas): {summary['skipped_no_deltas']}, "
+          f"Skipped (unchanged): {summary['skipped_unchanged']}, Errors: {summary['errors']}, "
+          f"Embed failures: {len(failed_guids)}")
 
 def query_command(args):
     """Submits a query to the ChromaDB and prints the formatted results."""
@@ -145,8 +253,23 @@ def main():
             "openproduct",
             help="Open a named DAZ product in DAZ Studio's Content Library Pane",
         ),
-        
+
     }
+
+    morphs_parser = subparsers.add_parser("morphs", help="Morph library ingest commands.")
+    morphs_subparsers = morphs_parser.add_subparsers(dest="morphs_command", required=True)
+    morphs_index_parser = morphs_subparsers.add_parser(
+        "index", help="Index .dsf morph files into morph_index.db and ChromaDB."
+    )
+    morphs_index_parser.add_argument(
+        "--library-path", type=str, default=None,
+        help="Path to the DAZ content library root (containing data/). Falls back to MORPH_LIBRARY_PATH env var.",
+    )
+    morphs_index_parser.add_argument(
+        "--force", action="store_true",
+        help="Wipe morph_index.db, morph_cache/, and the morphs Chroma collection, then re-index everything.",
+    )
+    morphs_index_parser.set_defaults(func=morphs_index_command)
 
     parsers["query"].add_argument("prompt", help="The search prompt.")
     parsers["query"].add_argument(

@@ -1,0 +1,15 @@
+; Daz Studio plugin export table.
+;
+; DZ_PLUGIN_DEFINITION (dzplugin.h) emits getSDKVersion()/getPluginDefinition()
+; with __declspec(dllexport) but no extern "C", so they would otherwise be
+; exported under C++-decorated names. Daz Studio resolves them by plain name, so
+; this .def re-exports them undecorated -- same approach as the SDK's own
+; samples/interface/AFirstPlugin/afirstplugin.def.
+;
+; LIBRARY must match the target's OUTPUT_NAME in CMakeLists.txt.
+LIBRARY dzmorphinjector
+EXPORTS
+	getSDKVersion			@1
+	getPluginDefinition		@2
+SECTIONS
+	.data READ WRITE

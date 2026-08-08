@@ -110,12 +110,12 @@ Deviations from the parent spec's original schema:
 
 ## 5. `.tmb` Binary Format
 
-Unchanged from the parent spec — it matches the real `morph.deltas.values` shape (`[vertex_index, dx, dy, dz]` per row):
+Matches the real `morph.deltas.values` shape (`[vertex_index, dx, dy, dz]` per row). One deviation from the parent spec: `vertex_count` is **signed** (int32), not uint32 — real `.dsf` files legitimately use `-1` as a documented DSON sentinel meaning "unspecified/same as base mesh" (found during the full real-library run; see `docs/superpowers/plans/2026-08-06-morph-ingest-transpiler.md` follow-up `daz-content-browser-uc9`). Packing it as unsigned raised `struct.error` and silently dropped every affected file.
 
 ```
 HEADER (16 bytes):
   magic bytes        "TMB1"        (4 bytes)
-  vertex_count        uint32        (4 bytes)  -- base mesh vertex count
+  vertex_count        int32         (4 bytes)  -- base mesh vertex count; -1 = unspecified (DSON sentinel)
   delta_count         uint32        (4 bytes)  -- sparse delta rows present
   reserved                          (4 bytes)
 
