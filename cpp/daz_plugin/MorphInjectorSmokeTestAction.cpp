@@ -122,8 +122,18 @@ void DzMorphInjectorSmokeTestAction::executeAction()
     // Drive the channel to its maximum so the vertex deltas are visibly applied
     // straight away -- an injected morph sitting at 0 looks identical to no
     // injection at all, which is the single most confusing thing a manual
-    // verifier can be shown.
-    channel->setValue( channel->getMax() );
+    // verifier can be shown. ONLY when there's no attached formula controller,
+    // though: a formula-driven channel's live value is computed by threading
+    // this raw setValue() as the seed through its controller chain (confirmed
+    // live during beads-w56's re-verification -- setting the seed to 1 here
+    // silently added a spurious "+1 * (last multiply-stage operand)" to every
+    // subsequent chain evaluation, e.g. turning a correct A*B result into
+    // (1+A)*B). For a formula-driven channel, leaving the seed at its default
+    // (0) is what makes the chain's output actually reflect the formula.
+    if ( channel->getNumControllers() == 0 )
+    {
+        channel->setValue( channel->getMax() );
+    }
 
     report( tr( "Injected '%1' onto '%2' as morph channel '%3' and set it to %4." )
                 .arg( guid )
