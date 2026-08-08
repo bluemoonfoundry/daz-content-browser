@@ -483,11 +483,18 @@ DzFloatProperty* InjectorCore::createAndAttachMorph( const injector_core::MorphR
 /*
     Step 6 of design section 3.2.
 
-    formulas_json is a JSON *array* of formula objects, each with "output" and
-    "operations" (see cpp/tests/fixtures/algebra_pJCMCloakBend_m90.json and
-    spline_body_cbs_foot_Back_l.json). FormulaCompiler consumes one element at a
-    time and ignores "output": every formula stored on a morph row drives that
-    morph's own value channel, which is exactly the property passed here.
+    formulas_json is a JSON *array* of formula objects, each with "output",
+    "operations", and an optional "stage" (see cpp/tests/fixtures/*.json).
+    "output" is ignored: every formula stored on a morph row drives that morph's
+    own value channel, which is exactly the property passed here.
+
+    The array is compiled and attached as ONE SET, not entry by entry
+    (beads-w56). Multiple entries routinely drive the same output and combine
+    via "stage" ("mult" = product, absent = implicit sum); handling them
+    independently made each entry clobber the last, so a spline JCM gated by a
+    "mult" corrective switch emitted only the gate and discarded its
+    deformation. FormulaControllerBuilder chains them in array order, which is
+    the order Daz evaluates them in.
 
     ResolutionContext carries record.target_figure -- NOT the node's name and not
     an empty string. Pathless operands ("Genesis8Female:#pJCMCloakBend_m90?value")
@@ -540,30 +547,31 @@ void InjectorCore::attachFormulas( const injector_core::MorphRecord& record,
             return adapter->resolve( operand, context );
         };
 
-    for ( nlohmann::json::const_iterator it = parsed.begin(); it != parsed.end(); ++it )
+    std::vector<injector_core::CompiledFormula> compiled;
+    try
     {
-        try
-        {
-            const std::variant<injector_core::AlgebraFormula, injector_core::SplineFormula> ir =
-                injector_core::compileFormula( *it );
+        compiled = injector_core::compileFormulaSet( parsed );
+    }
+    catch ( const std::exception& e )
+    {
+        // Compilation is atomic across the array: a partially-compiled set would
+        // silently change the morph's arithmetic (e.g. a dropped "mult" gate
+        // leaves the morph firing at full strength), so the morph is injected
+        // with no formulas at all rather than with wrong ones.
+        logFailure( QString( "could not compile the formulas on '%1': %2 -- morph injected "
+                             "without its formulas" )
+                        .arg( name )
+                        .arg( QString::fromUtf8( e.what() ) ) );
+        return;
+    }
 
-            if ( !m_builder.attachFormula( ir, channel, resolver ) )
-            {
-                // FormulaControllerBuilder already logged the specific operand.
-                logInfo( QString( "a formula on '%1' could not be attached; the morph is "
-                                  "injected but that formula is inactive" )
-                             .arg( name ) );
-            }
-        }
-        catch ( const std::exception& e )
-        {
-            // FormulaCompileError and anything else the compiler raises: skip
-            // this one formula, keep the morph and its other formulas.
-            logFailure( QString( "could not compile a formula on '%1': %2 -- skipping "
-                                 "that formula" )
-                            .arg( name )
-                            .arg( QString::fromUtf8( e.what() ) ) );
-        }
+    if ( !m_builder.attachFormulaSet( compiled, channel, resolver ) )
+    {
+        // FormulaControllerBuilder already logged the specific cause, and left
+        // the channel untouched.
+        logInfo( QString( "the formulas on '%1' could not be attached; the morph is "
+                          "injected but static" )
+                     .arg( name ) );
     }
 }
 

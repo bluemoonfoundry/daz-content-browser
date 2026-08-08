@@ -1,5 +1,7 @@
 #include "FormulaControllerBuilder.h"
 
+#include <variant>
+
 #include "dzapp.h"
 #include "dzerclink.h"
 #include "dzformula.h"
@@ -9,126 +11,283 @@ namespace daz_plugin {
 
 namespace {
 
-// Logs and returns nullptr's-worth-of-failure for an operand that didn't
-// resolve. Per design doc S7, a per-morph/per-formula injection failure
-// logs and is skipped rather than crashing the host process -- the caller
-// (attachAlgebraFormula/attachSplineFormula) is responsible for aborting
-// just this formula's attach, not the whole plugin.
-void logUnresolvedOperand(const std::string& operand) {
+void logMessage(const QString& message) {
     if (dzApp) {
-        dzApp->log(QString("[daz_plugin] FormulaControllerBuilder: failed to resolve "
-                            "formula operand \"%1\" -- skipping this formula")
-                        .arg(QString::fromStdString(operand)));
+        dzApp->log("[daz_plugin] FormulaControllerBuilder: " + message);
     }
 }
 
-}  // namespace
-
-bool FormulaControllerBuilder::attachFormula(
-    const std::variant<injector_core::AlgebraFormula, injector_core::SplineFormula>& ir,
-    DzNumericProperty* targetProperty,
-    const OperandResolver& resolveOperand) {
-    if (!targetProperty) {
-        return false;
-    }
-
-    if (const auto* algebra = std::get_if<injector_core::AlgebraFormula>(&ir)) {
-        return attachAlgebraFormula(*algebra, targetProperty, resolveOperand);
-    }
-    const auto& spline = std::get<injector_core::SplineFormula>(ir);
-    return attachSplineFormula(spline, targetProperty, resolveOperand);
+void logUnresolvedOperand(const std::string& operand) {
+    logMessage(QString("failed to resolve formula operand \"%1\" -- abandoning this "
+                        "morph's whole formula chain")
+                   .arg(QString::fromStdString(operand)));
 }
 
-// AlgebraFormula -> DzFormula (dzformula.h), walked left-to-right (the IR's
-// ops vector is already RPN in source order):
-//   - PushConst{value}   -> DzFormula::addOpPush(float)
-//   - PushOperand{operand} -> resolveOperand(operand), then
-//                             DzFormula::addOpPush(DzNumericProperty*)
-//   - AlgebraOp{Mult}    -> DzFormula::addOp(DzFormula::OpMultiply)
-//   - AlgebraOp{Neg}     -> DzFormula::addOp(DzFormula::OpNegate)
-// The built DzFormula is added to a fresh DzFormulaController via
-// addFormula() (default Stage::StageSum -- FormulaCompiler's IR has no
-// concept of stages, and StageSum is the natural default for a single
-// formula owning its own controller). The *controller* -- not the
-// DzFormula, which is a plain DzBase, not a DzNumericController -- is what
-// gets attached via DzNumericProperty::insertController().
+// ---------------------------------------------------------------------------
+// ERC shape matching
+// ---------------------------------------------------------------------------
+// An ERC link computes, per dzerclink.h's ERCType, a fixed transform of the
+// running value using one driving property, one scalar and one addend. Only a
+// few algebra shapes fit -- but per the header's corpus analysis those few
+// shapes are 100% of the real production data, and unlike DzFormulaController
+// their combination arithmetic is live-verified.
+struct ErcShape {
+    DzERCLink::ERCType type;
+    std::string operand;
+    double scalar = 1.0;
+};
+
+// Matches an AlgebraFormula against the ERC-expressible vocabulary:
 //
-// On an unresolved operand, the partially-built DzFormula is deleted (it
-// was never handed to a DzFormulaController yet, so this is a plain
-// non-owning `delete`) and nothing is attached to targetProperty. This
-// matches the ticket's stated posture (log + skip, not crash).
-bool FormulaControllerBuilder::attachAlgebraFormula(const injector_core::AlgebraFormula& formula,
-                                                      DzNumericProperty* targetProperty,
-                                                      const OperandResolver& resolveOperand) {
-    DzFormula* dzFormula = new DzFormula();
+//   Sum     + [ PushOperand ]                   -> ERCDeltaAdd, scalar  1
+//   Sum     + [ PushOperand, PushConst k, Mult ]-> ERCDeltaAdd, scalar  k
+//   Sum     + [ PushOperand, Neg ]              -> ERCDeltaAdd, scalar -1
+//   Product + [ PushOperand ]                   -> ERCMultiply
+//
+// ERCDeltaAdd computes `val + prop*scalar + addend`, so a Sum entry that is a
+// driving property times a constant is exactly a delta-add with that constant
+// as its scalar -- which is precisely how Daz's own loader encodes the
+// 98.73%-of-corpus `push:url push:val mult` shape (verified live: native
+// Genesis 9 JCMs carry ERCDeltaAdd/ERCMultiply link pairs, never formulas).
+//
+// A Product entry scaled by a constant (`stage:"mult"` with a trailing
+// `push:val mult`) is deliberately NOT matched here: ERCMultiply's scalar is
+// not verified to participate the way ERCDeltaAdd's does, so such an entry is
+// routed to the DzFormulaController fallback rather than guessed at. No such
+// entry exists in the production index.
+bool matchErcShape(const injector_core::AlgebraFormula& algebra,
+                    injector_core::FormulaStage stage,
+                    ErcShape& out) {
+    using namespace injector_core;
 
-    for (const auto& op : formula.ops) {
-        if (const auto* constOp = std::get_if<injector_core::PushConst>(&op)) {
-            dzFormula->addOpPush(static_cast<float>(constOp->value));
-        } else if (const auto* operandOp = std::get_if<injector_core::PushOperand>(&op)) {
-            DzNumericProperty* resolved = resolveOperand ? resolveOperand(operandOp->operand) : nullptr;
-            if (!resolved) {
-                logUnresolvedOperand(operandOp->operand);
-                delete dzFormula;
-                return false;
-            }
-            dzFormula->addOpPush(resolved);
-        } else {
-            const auto& algebraOp = std::get<injector_core::AlgebraOp>(op);
-            switch (algebraOp.kind) {
-                case injector_core::AlgebraOp::Mult:
-                    dzFormula->addOp(DzFormula::OpMultiply);
-                    break;
-                case injector_core::AlgebraOp::Neg:
-                    dzFormula->addOp(DzFormula::OpNegate);
-                    break;
-            }
-        }
-    }
-
-    DzFormulaController* controller = new DzFormulaController();
-    controller->addFormula(dzFormula, DzFormulaController::StageSum);
-    targetProperty->insertController(controller);
-    return true;
-}
-
-// SplineFormula -> DzERCLink (dzerclink.h), keyed:
-//   - ERCType::ERCKeyed (setType)
-//   - ERCKeyInterpolation::TCB_INTERP / LINEAR_INTERP (setKeyInterpolation),
-//     chosen from tcb_interpolation
-//   - per SplineKey: addKeyValue(key, value, t, c, b) (5-arg TCB overload)
-//     when has_tcb, else addKeyValue(key, value) (2-arg linear overload)
-//   - setProperty() binds the link's driving/control property, resolved
-//     from driving_operand via the same resolver used for algebra operands
-// DzERCLink derives directly from DzNumericController (unlike DzFormula, no
-// separate controller wrapper is needed), so the link itself is what's
-// passed to DzNumericProperty::insertController() on the target/slave
-// property.
-bool FormulaControllerBuilder::attachSplineFormula(const injector_core::SplineFormula& formula,
-                                                     DzNumericProperty* targetProperty,
-                                                     const OperandResolver& resolveOperand) {
-    DzNumericProperty* drivingProperty =
-        resolveOperand ? resolveOperand(formula.driving_operand) : nullptr;
-    if (!drivingProperty) {
-        logUnresolvedOperand(formula.driving_operand);
+    const auto& ops = algebra.ops;
+    if (ops.empty()) {
         return false;
     }
 
+    const auto* leadOperand = std::get_if<PushOperand>(&ops[0]);
+    if (!leadOperand) {
+        return false;
+    }
+    out.operand = leadOperand->operand;
+
+    if (stage == FormulaStage::Product) {
+        if (ops.size() != 1) {
+            return false;
+        }
+        out.type = DzERCLink::ERCMultiply;
+        out.scalar = 1.0;
+        return true;
+    }
+
+    out.type = DzERCLink::ERCDeltaAdd;
+
+    if (ops.size() == 1) {
+        out.scalar = 1.0;
+        return true;
+    }
+
+    if (ops.size() == 2) {
+        const auto* neg = std::get_if<AlgebraOp>(&ops[1]);
+        if (!neg || neg->kind != AlgebraOp::Neg) {
+            return false;
+        }
+        out.scalar = -1.0;
+        return true;
+    }
+
+    if (ops.size() == 3) {
+        const auto* constant = std::get_if<PushConst>(&ops[1]);
+        const auto* mult = std::get_if<AlgebraOp>(&ops[2]);
+        if (!constant || !mult || mult->kind != AlgebraOp::Mult) {
+            return false;
+        }
+        out.scalar = constant->value;
+        return true;
+    }
+
+    return false;
+}
+
+// SplineFormula -> DzERCLink, keyed. This is byte-for-byte what Daz's native
+// loader produces for a bone-rotation-driven JCM (verified live on Genesis 9:
+// ERCKeyed link, TCB interpolation, driving property = the bone's rotation
+// channel, one key per spline control point).
+DzERCLink* buildSplineLink(const injector_core::SplineFormula& spline,
+                            DzNumericProperty* drivingProperty) {
     DzERCLink* link = new DzERCLink();
     link->setType(DzERCLink::ERCKeyed);
-    link->setKeyInterpolation(formula.tcb_interpolation ? DzERCLink::TCB_INTERP
-                                                          : DzERCLink::LINEAR_INTERP);
+    link->setKeyInterpolation(spline.tcb_interpolation ? DzERCLink::TCB_INTERP
+                                                        : DzERCLink::LINEAR_INTERP);
     link->setProperty(drivingProperty);
 
-    for (const auto& key : formula.keys) {
+    for (const auto& key : spline.keys) {
         if (key.has_tcb) {
             link->addKeyValue(key.key, key.value, key.t, key.c, key.b);
         } else {
             link->addKeyValue(key.key, key.value);
         }
     }
+    return link;
+}
 
-    targetProperty->insertController(link);
+// AlgebraFormula -> DzFormula, walked left-to-right (the IR's ops vector is
+// already RPN in source order). Returns nullptr (having deleted the partial
+// formula) if any operand fails to resolve.
+DzFormula* buildDzFormula(const injector_core::AlgebraFormula& algebra,
+                           const OperandResolver& resolveOperand) {
+    DzFormula* formula = new DzFormula();
+
+    for (const auto& op : algebra.ops) {
+        if (const auto* constOp = std::get_if<injector_core::PushConst>(&op)) {
+            formula->addOpPush(static_cast<float>(constOp->value));
+        } else if (const auto* operandOp = std::get_if<injector_core::PushOperand>(&op)) {
+            DzNumericProperty* resolved =
+                resolveOperand ? resolveOperand(operandOp->operand) : nullptr;
+            if (!resolved) {
+                logUnresolvedOperand(operandOp->operand);
+                delete formula;
+                return nullptr;
+            }
+            formula->addOpPush(resolved);
+        } else {
+            const auto& algebraOp = std::get<injector_core::AlgebraOp>(op);
+            switch (algebraOp.kind) {
+                case injector_core::AlgebraOp::Mult:
+                    formula->addOp(DzFormula::OpMultiply);
+                    break;
+                case injector_core::AlgebraOp::Neg:
+                    formula->addOp(DzFormula::OpNegate);
+                    break;
+            }
+        }
+    }
+    return formula;
+}
+
+}  // namespace
+
+bool FormulaControllerBuilder::buildChain(
+    const std::vector<injector_core::CompiledFormula>& formulas,
+    const OperandResolver& resolveOperand,
+    std::vector<DzNumericController*>& out) {
+    using namespace injector_core;
+
+    out.clear();
+
+    // Lazily created, and shared by every entry that isn't ERC-expressible, so
+    // those entries combine through addFormula()'s Stage rather than through
+    // separate clobbering controllers. It occupies the chain slot of the FIRST
+    // such entry.
+    DzFormulaController* fallbackController = nullptr;
+
+    // Set false the moment any entry cannot be built; the loop then stops and
+    // everything built so far is destroyed, leaving the property untouched.
+    bool ok = true;
+
+    for (const auto& compiled : formulas) {
+        if (!ok) {
+            break;
+        }
+        if (const auto* spline = std::get_if<SplineFormula>(&compiled.body)) {
+            if (compiled.stage == FormulaStage::Product) {
+                // A keyed ERC link multiplies nothing, and DzFormula has no
+                // spline opcode at all (dzformula.h's Operation enum), so a
+                // Product-staged spline is not representable by either
+                // mechanism. Refuse rather than silently mis-evaluate. No such
+                // entry exists in the production morph index.
+                logMessage("a spline formula carries stage \"mult\", which no SDK "
+                            "controller can express -- abandoning this morph's formula chain");
+                ok = false;
+                break;
+            }
+
+            DzNumericProperty* driving =
+                resolveOperand ? resolveOperand(spline->driving_operand) : nullptr;
+            if (!driving) {
+                logUnresolvedOperand(spline->driving_operand);
+                ok = false;
+                break;
+            }
+            out.push_back(buildSplineLink(*spline, driving));
+            continue;
+        }
+
+        const auto& algebra = std::get<AlgebraFormula>(compiled.body);
+
+        ErcShape shape;
+        if (matchErcShape(algebra, compiled.stage, shape)) {
+            DzNumericProperty* driving =
+                resolveOperand ? resolveOperand(shape.operand) : nullptr;
+            if (!driving) {
+                logUnresolvedOperand(shape.operand);
+                ok = false;
+                break;
+            }
+            DzERCLink* link = new DzERCLink();
+            link->setType(shape.type);
+            link->setScalar(shape.scalar);
+            link->setAddend(0.0);
+            link->setProperty(driving);
+            out.push_back(link);
+            continue;
+        }
+
+        // Not ERC-expressible: fold into the shared DzFormulaController with
+        // this entry's Stage. addFormula() is exactly the SDK's mechanism for
+        // combining several formulas on one controller (dzformula.h).
+        DzFormula* formula = buildDzFormula(algebra, resolveOperand);
+        if (!formula) {
+            ok = false;  // buildDzFormula already logged the operand
+            break;
+        }
+        if (!fallbackController) {
+            fallbackController = new DzFormulaController();
+            out.push_back(fallbackController);
+        }
+        fallbackController->addFormula(formula,
+                                        compiled.stage == FormulaStage::Product
+                                            ? DzFormulaController::StageProduct
+                                            : DzFormulaController::StageSum);
+    }
+
+    if (!ok) {
+        // Nothing has touched targetProperty yet, so these controllers are
+        // still unowned and safe to delete. Deleting a DzFormulaController
+        // also destroys the DzFormulas it took ownership of via addFormula().
+        for (DzNumericController* controller : out) {
+            delete controller;
+        }
+        out.clear();
+        return false;
+    }
+
+    return true;
+}
+
+bool FormulaControllerBuilder::attachFormulaSet(
+    const std::vector<injector_core::CompiledFormula>& formulas,
+    DzNumericProperty* targetProperty,
+    const OperandResolver& resolveOperand) {
+    if (!targetProperty) {
+        return false;
+    }
+    if (formulas.empty()) {
+        return true;
+    }
+
+    std::vector<DzNumericController*> chain;
+    if (!buildChain(formulas, resolveOperand, chain) || chain.empty()) {
+        return false;
+    }
+
+    // Insert in formulas_json array order. insertController()'s default
+    // idx = -1 APPENDS (verified live), and Daz applies a property's
+    // controllers front-to-back with each transforming the running value, so
+    // array order == evaluation order.
+    for (DzNumericController* controller : chain) {
+        targetProperty->insertController(controller);
+    }
     return true;
 }
 

@@ -56,4 +56,34 @@ struct SplineFormula {
     bool tcb_interpolation = false;  // true: spline_tcb, false: spline_linear
 };
 
+// How one formulas_json array entry combines with the other entries targeting the
+// same output property.
+//
+// A morph's formulas_json is an ARRAY, and multiple entries routinely drive the same
+// output. Each entry carries an optional top-level "stage" key selecting how its
+// result folds into the running value:
+//
+//   absent (or any unrecognized value) -> Sum     -- the implicit default; the entry's
+//                                                    result is ADDED to the running value
+//   "mult"                             -> Product -- the entry's result MULTIPLIES the
+//                                                    running value
+//
+// Dropping this distinction is what made every multi-entry morph evaluate to only its
+// last entry (see beads-w56): a spline-driven JCM gated by a `stage:"mult"` corrective
+// switch would discard the spline entirely and emit just the gate value.
+enum class FormulaStage {
+    Sum,
+    Product,
+};
+
+// One fully-compiled formulas_json array entry: its formula body plus the stage that
+// says how the body combines with its siblings. `stage_explicit` records whether the
+// JSON actually carried a "stage" key, purely so callers can log/diagnose the
+// difference between an implicit and an explicit sum; it never affects arithmetic.
+struct CompiledFormula {
+    std::variant<AlgebraFormula, SplineFormula> body;
+    FormulaStage stage = FormulaStage::Sum;
+    bool stage_explicit = false;
+};
+
 }  // namespace injector_core

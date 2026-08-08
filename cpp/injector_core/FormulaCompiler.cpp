@@ -167,6 +167,22 @@ AlgebraFormula compileAlgebra(const nlohmann::json& ops) {
     return formula;
 }
 
+// Reads a formulas_json entry's optional top-level "stage" key.
+//
+// Only "mult" selects Product. Anything else -- key absent, null, empty, an explicit
+// "sum", or an unrecognized string -- is Sum, matching the DSON convention that the
+// summing stage is the implicit default. An unrecognized string is deliberately NOT an
+// error: an unknown stage that fell back to Sum would at worst mis-scale one entry,
+// whereas throwing would drop the morph's whole formula set.
+FormulaStage parseStage(const nlohmann::json& formula, bool& explicitOut) {
+    explicitOut = formula.contains("stage") && formula.at("stage").is_string();
+    if (!explicitOut) {
+        return FormulaStage::Sum;
+    }
+    return formula.at("stage").get<std::string>() == "mult" ? FormulaStage::Product
+                                                           : FormulaStage::Sum;
+}
+
 }  // namespace
 
 std::variant<AlgebraFormula, SplineFormula> compileFormula(const nlohmann::json& formula) {
@@ -181,6 +197,35 @@ std::variant<AlgebraFormula, SplineFormula> compileFormula(const nlohmann::json&
     }
 
     return compileAlgebra(ops);
+}
+
+CompiledFormula compileFormulaEntry(const nlohmann::json& formula) {
+    CompiledFormula compiled;
+    compiled.body = compileFormula(formula);
+    compiled.stage = parseStage(formula, compiled.stage_explicit);
+    return compiled;
+}
+
+std::vector<CompiledFormula> compileFormulaSet(const nlohmann::json& formulas) {
+    if (!formulas.is_array()) {
+        throw FormulaCompileError("formulas_json is not a JSON array");
+    }
+
+    std::vector<CompiledFormula> compiled;
+    compiled.reserve(formulas.size());
+
+    for (size_t i = 0; i < formulas.size(); ++i) {
+        try {
+            compiled.push_back(compileFormulaEntry(formulas[i]));
+        } catch (const FormulaCompileError& e) {
+            // Re-thrown with the entry index so the log names the culprit; the whole
+            // set is abandoned (see the header's ATOMIC note).
+            throw FormulaCompileError("formulas_json entry " + std::to_string(i) + ": " +
+                                       e.what());
+        }
+    }
+
+    return compiled;
 }
 
 }  // namespace injector_core

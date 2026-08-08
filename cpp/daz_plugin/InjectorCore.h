@@ -18,8 +18,11 @@
          DzMorph makes its own value channel (dzmorph.h getValueChannel()).
       5. MorphIndexReader::dependencies_of() -> recursive injectMorph() for each,
          BEFORE step 6, so every referenced morph has a live property to bind to.
-      6. formulas_json (if non-null) -> injector_core::compileFormula ->
-         FormulaControllerBuilder::attachFormula onto the value channel.
+      6. formulas_json (if non-null) -> injector_core::compileFormulaSet ->
+         FormulaControllerBuilder::attachFormulaSet onto the value channel. The
+         whole array is compiled and attached as one ordered set so that entries
+         sharing an output combine via their "stage" instead of clobbering each
+         other (beads-w56).
 
     THREADING (design section 7, binding constraint):
       Every public method here mutates the live scene graph and MUST be called on
@@ -145,7 +148,7 @@ private:
     //! Step 3+4: TmbReader -> DzMorphDeltas -> DzMorph -> addModifier.
     DzFloatProperty* createAndAttachMorph( const injector_core::MorphRecord& record );
 
-    //! Step 6: formulas_json -> compileFormula -> FormulaControllerBuilder.
+    //! Step 6: formulas_json -> compileFormulaSet -> FormulaControllerBuilder.
     void attachFormulas( const injector_core::MorphRecord& record, DzFloatProperty* channel );
 
     //! MorphRecord::tmb_path (cache-root-relative) -> an absolute filesystem path.
