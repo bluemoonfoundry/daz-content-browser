@@ -76,6 +76,34 @@ enum class FormulaStage {
     Product,
 };
 
+// The parsed pieces of a formulas_json entry's top-level "output" -- the property
+// the entry actually DRIVES.
+//
+// "output" uses the same URL grammar as an operand ({"op":"push","url":...}):
+//
+//     [<label>':'] [<path>] '#' <element> ['?' <property>]
+//
+// e.g. "Genesis9:#body_cbs_forearm_y135n_l?value"                       (pathless)
+//      "neck2:/data/.../Genesis9.dsf#neck2?center_point/x"              (path-form)
+//
+// daz_plugin's PropertySourceAdapter::parseOperand implements this same grammar for
+// operand strings, but it is a Qt/QString API living in the SDK-dependent half of the
+// project. injector_core must stay Qt- and SDK-free (it builds and tests in ordinary
+// CI with no Daz Studio install), so the grammar is re-expressed here over std::string.
+// The two must stay in sync; they are deliberately identical, field for field.
+//
+// `parsed` is false when the string carried no '#' at all -- the one shape neither
+// half of the project attempts to interpret. Such an entry is treated as foreign
+// (unclassifiable => not provably self => skipped), which is the safe direction.
+struct OutputRef {
+    std::string raw;       // the "output" string verbatim, for logging
+    std::string label;     // before the first ':' (may be empty)
+    std::string path;      // between ':' and '#' -- empty for the pathless form
+    std::string element;   // between '#' and '?' -- a node name or a property name
+    std::string property;  // after '?' -- "value", "center_point/x", ... (may be empty)
+    bool parsed = false;
+};
+
 // One fully-compiled formulas_json array entry: its formula body plus the stage that
 // says how the body combines with its siblings. `stage_explicit` records whether the
 // JSON actually carried a "stage" key, purely so callers can log/diagnose the
@@ -84,6 +112,13 @@ struct CompiledFormula {
     std::variant<AlgebraFormula, SplineFormula> body;
     FormulaStage stage = FormulaStage::Sum;
     bool stage_explicit = false;
+
+    // Which property this entry drives. NOT necessarily the owning morph's own value
+    // channel: 38% of the formula-bearing morphs in the production index carry at
+    // least one entry whose output targets something else entirely -- a bone's
+    // center_point/end_point, another morph's value (see daz-content-browser-2kv).
+    // Callers must classify with isSelfOutput() before attaching anything.
+    OutputRef output;
 };
 
 }  // namespace injector_core

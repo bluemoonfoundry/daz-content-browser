@@ -485,10 +485,27 @@ DzFloatProperty* InjectorCore::createAndAttachMorph( const injector_core::MorphR
 
     formulas_json is a JSON *array* of formula objects, each with "output",
     "operations", and an optional "stage" (see cpp/tests/fixtures/*.json).
-    "output" is ignored: every formula stored on a morph row drives that morph's
-    own value channel, which is exactly the property passed here.
 
-    The array is compiled and attached as ONE SET, not entry by entry
+    "output" NAMES THE PROPERTY THE ENTRY DRIVES, and is not always this morph's
+    own value channel (daz-content-browser-2kv). Corrective JCMs -- the primary
+    use case -- are self-output, but 38% of the formula-bearing morphs in the
+    production index carry at least one entry pointing somewhere else entirely:
+    "character/prop control dial" morphs (e.g. FICairo_head_bs_head,
+    M113AntennaMorph) drive bone center_point/end_point channels and other
+    morphs' values, and typically have ZERO self-output entries. Attaching those
+    to this morph's own channel is silent misattachment -- a bone-origin offset
+    folded into a dial's value.
+
+    PHASE 1 (this code) is a defensive guard, not full support: each entry is
+    classified via injector_core::isSelfOutput() and foreign ones are dropped
+    INDIVIDUALLY, so a mixed morph still gets its self-output entries combined
+    normally. An all-foreign morph degrades to exactly the formulas_json IS NULL
+    path -- deltas injected, plain uncontrolled DzFloatProperty -- with one
+    summary log line. PHASE 2 (resolving and attaching foreign outputs to their
+    real targets) is deferred; such content is normally loaded natively by Daz
+    Studio with its parent asset rather than injected standalone by this tool.
+
+    The surviving entries are compiled and attached as ONE SET, not entry by entry
     (beads-w56). Multiple entries routinely drive the same output and combine
     via "stage" ("mult" = product, absent = implicit sum); handling them
     independently made each entry clobber the last, so a spline JCM gated by a
@@ -565,7 +582,60 @@ void InjectorCore::attachFormulas( const injector_core::MorphRecord& record,
         return;
     }
 
-    if ( !m_builder.attachFormulaSet( compiled, channel, resolver ) )
+    // --- Output classification (daz-content-browser-2kv) ---------------------
+    // Done AFTER compilation, not before, so that compileFormulaSet's atomicity
+    // still covers the whole array: an entry with a broken "operations" shape is
+    // a red flag about the row as a whole and must still abandon the morph's
+    // formulas, even if that entry would have been skipped as foreign anyway.
+    std::vector<injector_core::CompiledFormula> selfOutput;
+    selfOutput.reserve( compiled.size() );
+    QString firstForeignTarget;
+    for ( size_t i = 0; i < compiled.size(); ++i )
+    {
+        if ( injector_core::isSelfOutput( compiled[i].output, record.name ) )
+        {
+            selfOutput.push_back( compiled[i] );
+            continue;
+        }
+        if ( firstForeignTarget.isEmpty() )
+        {
+            // Kept for the summary line below: one representative target beats
+            // either N log lines (these morphs carry up to hundreds of entries)
+            // or a bare count with nothing to grep the content back from.
+            firstForeignTarget = compiled[i].output.raw.empty()
+                                     ? QString( "<no \"output\" field>" )
+                                     : toQString( compiled[i].output.raw );
+        }
+    }
+
+    const size_t skipped = compiled.size() - selfOutput.size();
+    if ( skipped > 0 )
+    {
+        logInfo( QString( "'%1': skipping %2 of %3 formulas_json entries whose \"output\" "
+                          "targets a different property than this morph's own value channel "
+                          "(first such target: '%4') -- driving foreign outputs is out of "
+                          "scope (daz-content-browser-2kv phase 2); %5" )
+                     .arg( name )
+                     .arg( static_cast<qulonglong>( skipped ) )
+                     .arg( static_cast<qulonglong>( compiled.size() ) )
+                     .arg( firstForeignTarget )
+                     .arg( selfOutput.empty()
+                               ? QString( "the morph is injected with its deltas but no "
+                                          "formulas, as an uncontrolled float" )
+                               : QString( "the remaining %1 self-output entries are still "
+                                          "attached" )
+                                     .arg( static_cast<qulonglong>( selfOutput.size() ) ) ) );
+    }
+
+    if ( selfOutput.empty() )
+    {
+        // Nothing to attach. Deliberately NOT routed through attachFormulaSet
+        // (which no-ops on an empty set anyway) so the "injected but static"
+        // failure log below can't fire on what is an expected, benign outcome.
+        return;
+    }
+
+    if ( !m_builder.attachFormulaSet( selfOutput, channel, resolver ) )
     {
         // FormulaControllerBuilder already logged the specific cause, and left
         // the channel untouched.
