@@ -95,6 +95,9 @@ morph_cache/
 
 # --- Local SQLite databases ---
 *.db
+# Exception: a small, checked-in fixture for cpp/tests' MorphIndexReader tests
+# (extracted from the real morph_index.db, not a runtime artifact).
+!cpp/tests/fixtures/morph_index.db
 
 # --- Build artifacts ---
 build/
