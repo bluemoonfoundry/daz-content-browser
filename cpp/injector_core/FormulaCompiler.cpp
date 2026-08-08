@@ -1,5 +1,9 @@
 #include "FormulaCompiler.h"
 
+#include <cctype>
+#include <cstddef>
+#include <string>
+
 namespace injector_core {
 
 namespace {
@@ -183,7 +187,123 @@ FormulaStage parseStage(const nlohmann::json& formula, bool& explicitOut) {
                                                            : FormulaStage::Sum;
 }
 
+// Reads a formulas_json entry's optional top-level "output" into an OutputRef.
+//
+// A missing / non-string / '#'-less "output" is NOT a compile error: the entry's
+// arithmetic is still perfectly well-formed, it just cannot be proven to target this
+// morph, so it ends up classified foreign and skipped. Throwing here would instead
+// discard the morph's ENTIRE formula set (compileFormulaSet is atomic) over one
+// unparseable sibling.
+OutputRef parseOutputField(const nlohmann::json& formula) {
+    OutputRef ref;
+    if (!formula.contains("output") || !formula.at("output").is_string()) {
+        return ref;
+    }
+    parseOutputRef(formula.at("output").get<std::string>(), ref);
+    return ref;
+}
+
+int hexDigit(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+// Percent-decodes a DSON URL component ("Bend%20Collar_Shoulder%20L" -> "Bend
+// Collar_Shoulder L"). A '%' not followed by two hex digits is passed through
+// literally rather than treated as an error -- this is a comparison tolerance, not a
+// validator. '+' is NOT treated as a space: these are DSON URLs, not form encoding.
+std::string percentDecode(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '%' && i + 2 < s.size()) {
+            const int hi = hexDigit(s[i + 1]);
+            const int lo = hexDigit(s[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                out.push_back(static_cast<char>((hi << 4) | lo));
+                i += 2;
+                continue;
+            }
+        }
+        out.push_back(s[i]);
+    }
+    return out;
+}
+
+// Strips DSON's "-0x<hex>" disambiguation suffix, if present. Returns `s` unchanged
+// when there is none. At least one hex digit is required, so a name legitimately
+// ending in "-0x" is left alone.
+std::string stripHashSuffix(const std::string& s) {
+    const size_t marker = s.rfind("-0x");
+    if (marker == std::string::npos || marker + 3 >= s.size()) {
+        return s;
+    }
+    for (size_t i = marker + 3; i < s.size(); ++i) {
+        if (hexDigit(s[i]) < 0) {
+            return s;
+        }
+    }
+    return s.substr(0, marker);
+}
+
+// element (raw or percent-decoded, with or without the -0x suffix) == morphName.
+bool elementNames(const std::string& element, const std::string& morphName) {
+    if (element == morphName || stripHashSuffix(element) == morphName) {
+        return true;
+    }
+    const std::string decoded = percentDecode(element);
+    if (decoded == element) {
+        return false;  // nothing to gain from retrying an unencoded string
+    }
+    return decoded == morphName || stripHashSuffix(decoded) == morphName;
+}
+
 }  // namespace
+
+bool parseOutputRef(const std::string& output, OutputRef& out) {
+    out = OutputRef();
+    out.raw = output;
+
+    // Grammar (identical to PropertySourceAdapter::parseOperand):
+    //   [<label>':'] [<path>] '#' <element> ['?' <property>]
+    const size_t hashIdx = output.find('#');
+    if (hashIdx == std::string::npos) {
+        return false;
+    }
+
+    std::string head = output.substr(0, hashIdx);
+    const std::string tail = output.substr(hashIdx + 1);
+
+    const size_t colonIdx = head.find(':');
+    if (colonIdx != std::string::npos) {
+        out.label = head.substr(0, colonIdx);
+        head = head.substr(colonIdx + 1);
+    }
+    out.path = head;
+
+    const size_t qIdx = tail.find('?');
+    if (qIdx != std::string::npos) {
+        out.element = tail.substr(0, qIdx);
+        out.property = tail.substr(qIdx + 1);
+    } else {
+        out.element = tail;
+    }
+
+    out.parsed = true;
+    return true;
+}
+
+bool isSelfOutput(const OutputRef& ref, const std::string& morphName) {
+    if (!ref.parsed || morphName.empty()) {
+        return false;
+    }
+    if (!ref.property.empty() && ref.property != "value") {
+        return false;
+    }
+    return elementNames(ref.element, morphName);
+}
 
 std::variant<AlgebraFormula, SplineFormula> compileFormula(const nlohmann::json& formula) {
     if (!formula.contains("operations") || !formula.at("operations").is_array()) {
@@ -203,6 +323,7 @@ CompiledFormula compileFormulaEntry(const nlohmann::json& formula) {
     CompiledFormula compiled;
     compiled.body = compileFormula(formula);
     compiled.stage = parseStage(formula, compiled.stage_explicit);
+    compiled.output = parseOutputField(formula);
     return compiled;
 }
 

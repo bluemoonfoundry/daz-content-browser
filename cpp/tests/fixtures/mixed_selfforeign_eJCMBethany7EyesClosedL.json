@@ -1,0 +1,92 @@
+[
+  {
+    "output": "lEyelidUpperInner:/data/DAZ%203D/Genesis%203/Female/Genesis3Female.dsf#lEyelidUpperInner?translation/x",
+    "operations": [
+      {
+        "op": "push",
+        "url": "Genesis3Female:#eJCMBethany7EyesClosedL?value"
+      },
+      {
+        "op": "push",
+        "val": -0.1237113
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "lEyelidUpperInner:/data/DAZ%203D/Genesis%203/Female/Genesis3Female.dsf#lEyelidUpperInner?rotation/x",
+    "operations": [
+      {
+        "op": "push",
+        "url": "Genesis3Female:#eJCMBethany7EyesClosedL?value"
+      },
+      {
+        "op": "push",
+        "val": -4.515459
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "lEyelidTop:/data/DAZ%203D/Genesis%203/Female/Genesis3Female.dsf#lEyelidTop?translation/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "Genesis3Female:#eJCMBethany7EyesClosedL?value"
+      },
+      {
+        "op": "push",
+        "val": -0.08247423
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "lEyelidTop:/data/DAZ%203D/Genesis%203/Female/Genesis3Female.dsf#lEyelidTop?rotation/x",
+    "operations": [
+      {
+        "op": "push",
+        "url": "Genesis3Female:#eJCMBethany7EyesClosedL?value"
+      },
+      {
+        "op": "push",
+        "val": -5.36598
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "Genesis3Female:#eJCMBethany7EyesClosedL?value",
+    "operations": [
+      {
+        "op": "push",
+        "url": "Genesis3Female:/data/DAZ%203D/Genesis%203/Female/Morphs/DAZ%203D/Base%20Pose/eCTRLEyesClosedL.dsf#ECTRLEyesClosedL?value"
+      },
+      {
+        "op": "push",
+        "val": 1
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "Genesis3Female:#eJCMBethany7EyesClosedL?value",
+    "stage": "mult",
+    "operations": [
+      {
+        "op": "push",
+        "url": "Genesis3Female:/data/DAZ%203D/Genesis%203/Female/Morphs/DAZ%203D/Bethany%207/FHMBethany7.dsf#FHMBethany7?value"
+      }
+    ]
+  }
+]
