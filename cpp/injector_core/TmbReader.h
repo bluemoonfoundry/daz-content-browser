@@ -21,10 +21,32 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
-#include <span>
 #include <stdexcept>
 #include <string>
+
+// This header is included from two targets built at *different* language
+// standards: injector_core (C++20, for std::span) and daz_plugin (C++17 -- it
+// cannot be raised, because the vendored Qt 4.8 headers use `register` as a
+// storage-class specifier, which MSVC rejects outright under /std:c++20; see
+// cpp/injector_core/CMakeLists.txt). So the std::span accessor is compiled in
+// only where the standard actually provides it, and the always-available
+// deltaData()/deltaCount() pair is what daz_plugin (InjectorCore) uses.
+//
+// The class's *data members* are identical under both standards (a raw pointer
+// plus a count -- std::span is deliberately not a member), so there is no ODR /
+// layout mismatch between the two translation-unit sets.
+#if defined( _MSVC_LANG )
+#define INJECTOR_CORE_CPP_LANG _MSVC_LANG
+#else
+#define INJECTOR_CORE_CPP_LANG __cplusplus
+#endif
+
+#if INJECTOR_CORE_CPP_LANG >= 202002L
+#define INJECTOR_CORE_HAS_SPAN 1
+#include <span>
+#endif
 
 namespace injector_core {
 
@@ -65,8 +87,18 @@ public:
     // Signed: -1 is a valid, documented "unspecified" sentinel from DSON.
     int32_t vertexCount() const noexcept { return vertex_count_; }
 
+    // Zero-copy pointer/count view over the memory-mapped delta records.
+    // Available under every supported standard; valid only for the lifetime of
+    // this object (it points straight into the mapped view).
+    const TmbDelta* deltaData() const noexcept { return deltas_data_; }
+    size_t deltaCount() const noexcept { return deltas_count_; }
+
+#ifdef INJECTOR_CORE_HAS_SPAN
     // Zero-copy view over the memory-mapped delta records.
-    std::span<const TmbDelta> deltas() const noexcept { return deltas_; }
+    std::span<const TmbDelta> deltas() const noexcept {
+        return std::span<const TmbDelta>(deltas_data_, deltas_count_);
+    }
+#endif
 
 private:
     void* file_handle_ = nullptr;    // HANDLE
@@ -74,7 +106,8 @@ private:
     void* mapped_base_ = nullptr;    // LPVOID, base of MapViewOfFile
 
     int32_t vertex_count_ = 0;
-    std::span<const TmbDelta> deltas_;
+    const TmbDelta* deltas_data_ = nullptr;
+    size_t deltas_count_ = 0;
 
     void close() noexcept;
 };

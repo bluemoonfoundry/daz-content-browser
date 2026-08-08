@@ -15,6 +15,12 @@ constexpr const char* kFindByGuidSql =
     "max_value, is_clamped, formulas_json, content_hash, indexed_at "
     "FROM morphs WHERE guid = ?;";
 
+constexpr const char* kFindByIdSql =
+    "SELECT morph_id, guid, label, name, target_figure, group_path, "
+    "source_dsf_path, tmb_path, vertex_count, delta_count, min_value, "
+    "max_value, is_clamped, formulas_json, content_hash, indexed_at "
+    "FROM morphs WHERE morph_id = ?;";
+
 constexpr const char* kFindByNameSql =
     "SELECT morph_id, guid, label, name, target_figure, group_path, "
     "source_dsf_path, tmb_path, vertex_count, delta_count, min_value, "
@@ -121,6 +127,17 @@ std::optional<MorphRecord> MorphIndexReader::find_by_guid(const std::string& gui
                                   sqlite3_errmsg(db_));
     }
     sqlite3_bind_text(stmt, 1, guid.c_str(), -1, SQLITE_TRANSIENT);
+    return find_one(stmt);
+}
+
+std::optional<MorphRecord> MorphIndexReader::find_by_id(int64_t morph_id) const {
+    sqlite3_stmt* stmt = nullptr;
+    int rc = sqlite3_prepare_v2(db_, kFindByIdSql, -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) {
+        throw std::runtime_error(std::string("MorphIndexReader: failed to prepare find_by_id: ") +
+                                  sqlite3_errmsg(db_));
+    }
+    sqlite3_bind_int64(stmt, 1, morph_id);
     return find_one(stmt);
 }
 

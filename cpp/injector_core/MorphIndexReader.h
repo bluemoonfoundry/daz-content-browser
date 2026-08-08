@@ -54,6 +54,12 @@ public:
     // std::nullopt if no row matches.
     std::optional<MorphRecord> find_by_guid(const std::string& guid) const;
 
+    // Looks up a single morph by its primary key. Needed because the
+    // dependency graph (dependencies_of, below) is expressed purely in
+    // morph_ids -- an injector walking it has an id in hand and no guid.
+    // Returns std::nullopt if no row matches.
+    std::optional<MorphRecord> find_by_id(int64_t morph_id) const;
+
     // Looks up a single morph scoped by (target_figure, name) -- mirrors the
     // same scoping morph_index_manager.py's rebuild_dependencies() uses,
     // since pathless "name:X" formula operands are figure-local, not

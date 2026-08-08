@@ -2,10 +2,7 @@
     Daz Morph Injector -- plugin entry point.
 
     This file contains *only* the Daz Studio SDK plugin registration
-    boilerplate. It deliberately implements no injection behaviour: its whole
-    job is to prove the build + link + load path (dzcore, the SDK's vendored
-    Qt 4.8, and the injector_core static lib) before Subsystem B Tasks 6-8 add
-    real functionality.
+    boilerplate; all behaviour lives in the classes it registers.
 
     The macro usage below mirrors the SDK's own sample at
     samples/interface/AFirstPlugin/pluginmain.cpp.
@@ -14,6 +11,7 @@
 #include "dzplugin.h"
 #include "dzapp.h"
 
+#include "MorphInjectorSmokeTestAction.h"
 #include "version.h"
 
 /*****************************
@@ -35,11 +33,15 @@ DZ_PLUGIN_VERSION( PLUGIN_MAJOR, PLUGIN_MINOR, PLUGIN_REV, PLUGIN_BUILD );
 DZ_PLUGIN_DESCRIPTION( QString(
                            "Just-in-time morph injector for %1. "
                            "<br><br>"
-                           "This build is a registration-only skeleton: it "
-                           "exports no classes and performs no injection. It "
-                           "exists to verify that the plugin builds against the "
-                           "Daz Studio SDK and is accepted by %1's plugin "
-                           "loader."
+                           "Loads morphs on demand from a prebuilt binary morph "
+                           "index rather than requiring every morph to be "
+                           "resident at scene-load time, wiring each injected "
+                           "morph's ERC formulas up as native %1 controllers."
+                           "<br><br>"
+                           "This build exposes a single scaffolding action, "
+                           "<i>Morph Injector &gt; Inject Test Morph</i>, used to "
+                           "verify the injection pipeline against a live scene. "
+                           "The real search/injection UI is a later subsystem."
                        ).arg( dzApp->getAppName() ) );
 
 /*****************************
@@ -47,12 +49,12 @@ DZ_PLUGIN_DESCRIPTION( QString(
 *****************************/
 
 /**
-    No DZ_PLUGIN_CLASS_GUID registrations yet -- a plugin exporting zero classes
-    is valid and still shows up in Help > About Installed Plugins, which is what
-    the manual load check looks for.
+    Registers the smoke-test action (Subsystem B Task 8, beads-2mw.8) so that
+    InjectorCore is reachable from a running Daz Studio session at all -- Task 9's
+    manual end-to-end verification has nothing to invoke otherwise.
 
-    Subsystem B Tasks 6-8 add the real exported classes here (each needs its own
-    freshly generated GUID -- never reuse one from an SDK sample), e.g.:
-
-        DZ_PLUGIN_CLASS_GUID( DzMorphInjectorAction, <fresh-guid> );
+    The GUID below was freshly generated for this class and is never to be
+    reused; every additional exported class needs its own (see the 'ClassIDs'
+    page in the Daz Studio SDK documentation).
 **/
+DZ_PLUGIN_CLASS_GUID( DzMorphInjectorSmokeTestAction, B0E93757-286C-4147-9895-4019E6A837EB );

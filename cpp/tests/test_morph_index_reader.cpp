@@ -58,6 +58,30 @@ TEST(MorphIndexReader, FindByGuidReturnsNulloptForUnknownGuid) {
     EXPECT_FALSE(record.has_value());
 }
 
+// find_by_id is what InjectorCore (beads-2mw.8) walks the dependency graph
+// with: dependencies_of() yields morph_ids, never guids.
+TEST(MorphIndexReader, FindByIdReturnsSameRecordAsFindByGuid) {
+    MorphIndexReader reader(kFixtureDbPath);
+
+    auto byId = reader.find_by_id(kDependentMorphId);
+    auto byGuid = reader.find_by_guid(kDependentGuid);
+
+    ASSERT_TRUE(byId.has_value());
+    ASSERT_TRUE(byGuid.has_value());
+    EXPECT_EQ(byId->guid, byGuid->guid);
+    EXPECT_EQ(byId->name, kDependentName);
+    EXPECT_EQ(byId->target_figure, kFigure);
+    EXPECT_EQ(byId->tmb_path, byGuid->tmb_path);
+    EXPECT_EQ(byId->formulas_json, byGuid->formulas_json);
+}
+
+TEST(MorphIndexReader, FindByIdReturnsNulloptForUnknownId) {
+    MorphIndexReader reader(kFixtureDbPath);
+
+    EXPECT_FALSE(reader.find_by_id(-1).has_value());
+    EXPECT_FALSE(reader.find_by_id(999999999).has_value());
+}
+
 TEST(MorphIndexReader, FindByGuidHandlesNullFormulasJson) {
     MorphIndexReader reader(kFixtureDbPath);
 

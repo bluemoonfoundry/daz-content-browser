@@ -42,12 +42,18 @@ add_library(${DZ_PLUGIN_TGT_NAME} SHARED
     PluginMain.cpp
     PropertySourceAdapter.cpp
     FormulaControllerBuilder.cpp
+    InjectorCore.cpp
+    MorphInjectorSmokeTestAction.cpp
     ${DZ_PLUGIN_OS_SOURCES}
 )
 
-# Tasks 6-8 add Q_OBJECT-bearing classes here. AUTOMOC is wired up now, pinned to
-# the Qt4 moc vendored in the SDK (never a system Qt5/6 moc), so that the moc
-# toolchain is proven by this skeleton rather than discovered later.
+# DzMorphInjectorSmokeTestAction (MorphInjectorSmokeTestAction.h) is the first
+# Q_OBJECT-bearing class in this target, so AUTOMOC -- pinned to the Qt4 moc
+# vendored in the SDK, never a system Qt5/6 moc -- now does real work rather than
+# just proving the toolchain. Note the SDK samples instead end their .cpp with
+# `#include "moc_<name>.cpp"`; that pattern is deliberately NOT used here,
+# because CMake's AUTOMOC already compiles the generated moc_*.cpp via
+# mocs_compilation.cpp.
 set_property(TARGET ${DZ_PLUGIN_TGT_NAME} PROPERTY AUTOMOC ON)
 set_property(TARGET ${DZ_PLUGIN_TGT_NAME} PROPERTY AUTOMOC_EXECUTABLE "${DZSDK_MOC_EXECUTABLE}")
 set_property(TARGET ${DZ_PLUGIN_TGT_NAME} PROPERTY AUTOMOC_COMPILER_PREDEFINES OFF)

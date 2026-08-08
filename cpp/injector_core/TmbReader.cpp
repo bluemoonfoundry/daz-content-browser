@@ -110,7 +110,8 @@ TmbReader::TmbReader(const std::string& path) {
     vertex_count_ = header_vertex_count;
 
     const auto* data_start = reinterpret_cast<const TmbDelta*>(reinterpret_cast<const uint8_t*>(base) + sizeof(TmbHeader));
-    deltas_ = std::span<const TmbDelta>(data_start, header->delta_count);
+    deltas_data_ = data_start;
+    deltas_count_ = static_cast<size_t>(header_delta_count);
 }
 
 TmbReader::~TmbReader() {
@@ -122,12 +123,14 @@ TmbReader::TmbReader(TmbReader&& other) noexcept
       mapping_handle_(other.mapping_handle_),
       mapped_base_(other.mapped_base_),
       vertex_count_(other.vertex_count_),
-      deltas_(other.deltas_) {
+      deltas_data_(other.deltas_data_),
+      deltas_count_(other.deltas_count_) {
     other.file_handle_ = nullptr;
     other.mapping_handle_ = nullptr;
     other.mapped_base_ = nullptr;
     other.vertex_count_ = 0;
-    other.deltas_ = {};
+    other.deltas_data_ = nullptr;
+    other.deltas_count_ = 0;
 }
 
 TmbReader& TmbReader::operator=(TmbReader&& other) noexcept {
@@ -137,19 +140,22 @@ TmbReader& TmbReader::operator=(TmbReader&& other) noexcept {
         mapping_handle_ = other.mapping_handle_;
         mapped_base_ = other.mapped_base_;
         vertex_count_ = other.vertex_count_;
-        deltas_ = other.deltas_;
+        deltas_data_ = other.deltas_data_;
+        deltas_count_ = other.deltas_count_;
 
         other.file_handle_ = nullptr;
         other.mapping_handle_ = nullptr;
         other.mapped_base_ = nullptr;
         other.vertex_count_ = 0;
-        other.deltas_ = {};
+        other.deltas_data_ = nullptr;
+        other.deltas_count_ = 0;
     }
     return *this;
 }
 
 void TmbReader::close() noexcept {
-    deltas_ = {};
+    deltas_data_ = nullptr;
+    deltas_count_ = 0;
     vertex_count_ = 0;
 
     if (mapped_base_ != nullptr) {
