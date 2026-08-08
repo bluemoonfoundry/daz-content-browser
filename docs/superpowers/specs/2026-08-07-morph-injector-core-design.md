@@ -154,7 +154,7 @@ morph_index.db ──▶  MorphIndexReader                                     �
   5. `MorphIndexReader::dependencies_of` → for each dependency, recursively `InjectorCore::injectMorph` first (so referenced morphs exist and have a live property to reference before this morph's formula is compiled).
   6. If `formulas_json` is non-null: `FormulaCompiler::compileFormula` → `FormulaControllerBuilder` attaches the resulting native controller to `getValueChannel()`.
 
-- **`PluginMain`** — Daz SDK plugin registration boilerplate (`DZ_PLUGIN`/`DZ_IMPLEMENT_CLASS` macros per SDK convention); no logic beyond registering `InjectorCore`'s entry point.
+- **`PluginMain`** — Daz SDK plugin registration boilerplate (`DZ_PLUGIN_DEFINITION` plus a `DZ_PLUGIN_CLASS_GUID` entry per registered class — confirmed against `dzplugin.h`; this SDK has no `DZ_IMPLEMENT_CLASS` macro, corrected during beads-2mw.5's implementation); no logic beyond registering `InjectorCore`'s entry point.
 
 ## 4. Resolved: How an Evaluated Formula Attaches to the Scene Graph
 
@@ -183,7 +183,12 @@ cpp/
 │   ├── FormulaCompiler.{h,cpp}
 │   └── FormulaIR.h
 ├── daz_plugin/
-│   ├── CMakeLists.txt          # links injector_core + Qt + Daz SDK -> .dsx
+│   ├── CMakeLists.txt          # links injector_core + Qt + Daz SDK -> plugin .dll
+│   │                           # (Windows: a plain DLL in Studio's plugins/ dir --
+│   │                           # NOT .dsx, which is Daz's DSON-XML docs/inline-help
+│   │                           # payload format, a separate file shipped alongside
+│   │                           # the DLL, not the binary itself; corrected during
+│   │                           # beads-2mw.5's implementation)
 │   ├── PropertySourceAdapter.{h,cpp}
 │   ├── FormulaControllerBuilder.{h,cpp}
 │   ├── InjectorCore.{h,cpp}
