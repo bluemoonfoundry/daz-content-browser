@@ -16,6 +16,7 @@
 #include "dznode.h"
 #include "dznumericproperty.h"
 #include "dzobject.h"
+#include "dzscene.h"
 #include "dztarray.h"
 #include "dztypes.h"
 #include "dzvec3.h"
@@ -181,6 +182,60 @@ DzFloatProperty* InjectorCore::injectMorphByGuid( DzNode* targetNode, const QStr
 }
 
 /*
+    Which live node a morph belonging to `figureName` goes onto
+    (daz-content-browser-e9y).
+
+    FAST PATH FIRST, and it is the whole point of the ordering here: the
+    overwhelming majority of dependencies are same-figure (a full corpus scan put
+    the precomputed dependency edges at 99.96% same-figure), and those must not
+    pay for a scene traversal on every edge -- the design's budget is <100ms per
+    morph including its entire ERC chain (design section 1). Two string compares
+    against the node already in hand answer them; only a real cross-figure
+    mismatch falls through to the scene-wide lookup.
+
+    Label is compared as well as name because target_figure comes from the
+    content author's DSF, whereas the scene node carries whatever Daz Studio
+    named/labelled it on load; the scene-wide step uses the same
+    findNode -> findNodeByLabel fallback chain as
+    PropertySourceAdapter::resolveNode's scene-global step, for one node-lookup
+    convention across the plugin.
+
+    Returns 0 only when the figure genuinely is not in the scene. Callers log and
+    skip: silently falling back to the current node is precisely the bug this
+    exists to prevent.
+*/
+DzNode* InjectorCore::resolveNodeForFigure( const QString& figureName ) const
+{
+    if ( figureName.isEmpty() )
+    {
+        // No figure recorded for this morph -- nothing to disagree with, so the
+        // enclosing injection's node stands (this is also the pre-e9y behaviour).
+        return m_targetNode;
+    }
+
+    if ( m_targetNode
+         && ( m_targetNode->getName() == figureName || m_targetNode->getLabel() == figureName ) )
+    {
+        return m_targetNode;
+    }
+
+    if ( dzScene )
+    {
+        DzNode* node = dzScene->findNode( figureName );
+        if ( !node )
+        {
+            node = dzScene->findNodeByLabel( figureName );
+        }
+        if ( node )
+        {
+            return node;
+        }
+    }
+
+    return 0;
+}
+
+/*
     The one place m_targetNode is established. Saved/restored rather than simply
     assigned so that a caller who (legitimately) injects onto node B from inside
     a callback triggered by an injection onto node A cannot corrupt A's
@@ -209,6 +264,10 @@ DzFloatProperty* InjectorCore::injectMorph( DzNode* targetNode, int64_t morphId 
     DzNode* const savedNode = m_targetNode;
     m_targetNode = targetNode;
 
+    // retargetToOwnFigure = false (the default): at the top level the caller has
+    // named a node explicitly -- "inject this morph HERE" -- and that is
+    // authoritative. Only the injections this one *induces* re-derive their node
+    // from their own target_figure (daz-content-browser-e9y).
     DzFloatProperty* channel = injectById( morphId );
 
     m_targetNode = savedNode;
@@ -233,10 +292,17 @@ DzNumericProperty* InjectorCore::ensureInjectedAndGetValueChannel( int64_t morph
 
     // DzFloatProperty derives from DzNumericProperty (dzfloatproperty.h line 42),
     // so this widening is implicit and safe.
-    return injectById( morphId );
+    //
+    // retargetToOwnFigure = true: a formula operand can name a morph belonging to
+    // a different figure than the one currently being injected onto (confirmed
+    // live: FICairo_head_cbs_EyesLSideOut on Genesis9Eyes references
+    // FICairo_head_bs_head, whose target_figure is Genesis9), and this path is
+    // not gated by the precomputed dependency table at all
+    // (daz-content-browser-e9y).
+    return injectById( morphId, true );
 }
 
-DzFloatProperty* InjectorCore::injectById( int64_t morphId )
+DzFloatProperty* InjectorCore::injectById( int64_t morphId, bool retargetToOwnFigure )
 {
     // Re-entrancy guard, part 2: already injected during this top-level call.
     // Checked first, because a morph published here is the *desired* answer for
@@ -277,9 +343,47 @@ DzFloatProperty* InjectorCore::injectById( int64_t morphId )
         return 0;
     }
 
+    // --- Node re-derivation (daz-content-browser-e9y) -------------------------
+    // A morph's deltas are authored against ONE figure's mesh topology, so the
+    // node it goes onto is a property of the record, not of whoever asked for
+    // it. Same-figure records (nearly all of them) come back with m_targetNode
+    // unchanged after two string compares -- see resolveNodeForFigure.
+    DzNode* const savedNode = m_targetNode;
+    if ( retargetToOwnFigure )
+    {
+        const QString figure = toQString( record->target_figure );
+        DzNode* const owner = resolveNodeForFigure( figure );
+        if ( !owner )
+        {
+            // Log and skip, never guess: injecting onto m_targetNode here is
+            // exactly the bug -- the referenced figure's deltas would be loaded
+            // onto a mesh they were not authored for.
+            logInfo( QString( "morph_id %1 ('%2') belongs to figure '%3', which is not in the "
+                              "scene; skipping it rather than injecting it onto '%4'" )
+                         .arg( morphId )
+                         .arg( toQString( record->name ) )
+                         .arg( figure )
+                         .arg( m_targetNode ? m_targetNode->getName() : QString( "<none>" ) ) );
+            return 0;
+        }
+        if ( owner != m_targetNode )
+        {
+            logInfo( QString( "morph_id %1 ('%2') belongs to figure '%3', not to the node "
+                              "currently being injected ('%4'); injecting it onto '%5' instead" )
+                         .arg( morphId )
+                         .arg( toQString( record->name ) )
+                         .arg( figure )
+                         .arg( m_targetNode ? m_targetNode->getName() : QString( "<none>" ) )
+                         .arg( owner->getName() ) );
+            m_targetNode = owner;
+        }
+    }
+
     ++m_depth;
     DzFloatProperty* channel = injectRecord( *record );
     --m_depth;
+
+    m_targetNode = savedNode;
     return channel;
 }
 
@@ -350,7 +454,11 @@ DzFloatProperty* InjectorCore::injectRecord( const injector_core::MorphRecord& r
 
     for ( size_t i = 0; i < dependencies.size(); ++i )
     {
-        if ( !injectById( dependencies[i] ) )
+        // retargetToOwnFigure = true: an edge in the dependency table is not
+        // guaranteed same-figure (229 of 529,056 in the production index are
+        // cross-figure), and a cross-figure dependency belongs on its own node
+        // (daz-content-browser-e9y).
+        if ( !injectById( dependencies[i], true ) )
         {
             // Not fatal for this morph: its formula may still resolve the operand
             // against something already live in the scene, and if it doesn't,

@@ -121,9 +121,12 @@ public:
         names another indexed-but-not-yet-injected morph. Re-entrancy safe:
         see the m_inFlight / m_valueChannels notes on those members.
 
-        Only meaningful during an injection -- it injects onto whatever node the
-        enclosing injectMorph() call is targeting. Returns 0 if called outside
-        one (no target node is established).
+        Only meaningful during an injection: returns 0 if called outside one (no
+        target node is established). The referenced morph is injected onto the
+        node matching ITS OWN target_figure -- normally the same node the
+        enclosing injectMorph() call is targeting, but not necessarily
+        (daz-content-browser-e9y); a cross-figure operand whose figure is not in
+        the scene is logged and skipped rather than injected onto the wrong node.
     **/
     virtual DzNumericProperty* ensureInjectedAndGetValueChannel( int64_t morphId );
 
@@ -142,8 +145,31 @@ private:
     //! Steps 1-6 for one already-fetched record, against m_targetNode.
     DzFloatProperty* injectRecord( const injector_core::MorphRecord& record );
 
-    //! find_by_id + injectRecord, with the re-entrancy guards applied.
-    DzFloatProperty* injectById( int64_t morphId );
+    /**
+        find_by_id + injectRecord, with the re-entrancy guards applied.
+
+        @param retargetToOwnFigure  when true (every *nested* injection: a
+               dependencies_of edge or a formula operand), the fetched record's
+               own target_figure decides which node it is injected onto, rather
+               than inheriting the enclosing injection's m_targetNode
+               (daz-content-browser-e9y). When false (the top-level
+               injectMorph/injectMorphByGuid entry points), the caller-supplied
+               node is authoritative and is never second-guessed.
+    **/
+    DzFloatProperty* injectById( int64_t morphId, bool retargetToOwnFigure = false );
+
+    /**
+        The live scene node a morph whose target_figure is `figureName` belongs
+        on, or 0 if that figure is not in the scene.
+
+        Fast path first: a same-figure dependency -- 99.96% of the precomputed
+        dependency edges -- is answered by two string compares against the node
+        already being injected onto, with no scene traversal at all. Only a
+        genuine mismatch pays for the scene-wide lookup, which follows the same
+        findNode -> findNodeByLabel fallback chain PropertySourceAdapter::
+        resolveNode uses for its scene-global step.
+    **/
+    DzNode* resolveNodeForFigure( const QString& figureName ) const;
 
     //! Step 3+4: TmbReader -> DzMorphDeltas -> DzMorph -> addModifier.
     DzFloatProperty* createAndAttachMorph( const injector_core::MorphRecord& record );
@@ -174,10 +200,14 @@ private:
         triggers) attaches to. Set for the duration of a public injectMorph* call
         and restored afterwards; 0 outside one.
 
-        Deliberately a single node rather than a per-morph target: a morph's
-        dependency closure is figure-local by construction (Subsystem A's
-        rebuild_dependencies() scopes pathless references by target_figure), so
-        every morph in one closure belongs on the same object.
+        A dependency closure is *usually* figure-local (Subsystem A's
+        rebuild_dependencies() scopes pathless references by target_figure), but
+        it is NOT guaranteed to be: a Genesis9Eyes morph can legitimately depend
+        on a Genesis9 one, and injecting the latter's deltas onto the eye mesh is
+        a correctness bug (daz-content-browser-e9y). So every nested injection
+        re-derives its own node from the fetched record's target_figure and
+        saves/restores this member around the sub-injection, exactly the way the
+        public injectMorph() entry point does for its caller-supplied node.
     **/
     DzNode* m_targetNode;
 
