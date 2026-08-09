@@ -43,6 +43,29 @@ public:
     virtual QString getActionGroup() const { return tr( "Morph Injector" ); }
     virtual QString getDefaultMenuPath() const { return tr( "&Morph Injector" ); }
 
+public slots:
+    /**
+        Scriptable variant of executeAction(), for driving InjectorCore from
+        daz-script-server instead of the single hardcoded-guid/current-selection
+        menu click (beads-jhq.6: an end-to-end manual smoke test needs to inject
+        several distinct morphs -- one plain, one algebra-formula, one
+        spline-formula -- onto several distinct nodes within the SAME session,
+        which the env-var-driven executeAction() cannot do since
+        DAZ_MORPH_SMOKE_TEST_GUID is fixed for the process's whole lifetime).
+
+        `nodeLabel` is resolved via InjectorCore::resolveFigureNode() -- the
+        same findNode -> findNodeByLabel fallback chain a manifest reload
+        already uses -- rather than requiring the caller to first select the
+        node in the UI. `value` is set on the channel unconditionally after
+        injection, mirroring SceneManifestLoader::restore()'s own
+        channel->setValue() call exactly, so a value dialed here round-trips
+        through save/reload the same way a real manifest entry would.
+
+        Returns true on success; on failure, the reason is available via
+        InjectorCore::sharedInstance().lastError() same as executeAction().
+    **/
+    bool injectByGuidOntoLabel( const QString& guid, const QString& nodeLabel, double value );
+
 protected:
     virtual void executeAction();
 

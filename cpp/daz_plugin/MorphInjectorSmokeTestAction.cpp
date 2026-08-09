@@ -113,6 +113,22 @@ void report( const QString& message, bool ok )
     }
 }
 
+/*
+    Log-only counterpart to report() -- unlike executeAction() (a menu click, a
+    human is right there to dismiss a dialog), injectByGuidOntoLabel() exists
+    specifically to be driven from a script-server request blocking the same
+    GUI thread a QMessageBox::exec() would need to pump. Never popping a
+    dialog here means this path's correctness doesn't depend on
+    DAZ_MORPH_SMOKE_TEST_SILENT actually being set in the process environment.
+*/
+void logOnly( const QString& message )
+{
+    if ( dzApp )
+    {
+        dzApp->log( QString( "[daz_plugin] smoke test: %1" ).arg( message ) );
+    }
+}
+
 }  // namespace
 
 DzMorphInjectorSmokeTestAction::DzMorphInjectorSmokeTestAction()
@@ -137,6 +153,49 @@ DzMorphInjectorSmokeTestAction::DzMorphInjectorSmokeTestAction()
 void DzMorphInjectorSmokeTestAction::onSceneLoaded()
 {
     daz_plugin::SceneManifestLoader::restore();
+}
+
+bool DzMorphInjectorSmokeTestAction::injectByGuidOntoLabel( const QString& guid,
+                                                              const QString& nodeLabel,
+                                                              double value )
+{
+    daz_plugin::InjectorCore& injector = daz_plugin::InjectorCore::sharedInstance();
+    if ( !injector.isOpen() )
+    {
+        logOnly( tr( "Could not open the morph index: %1" ).arg( injector.lastError() ) );
+        return false;
+    }
+
+    DzNode* node = injector.resolveFigureNode( nodeLabel );
+    if ( !node )
+    {
+        logOnly( tr( "No node matching '%1' is in the scene." ).arg( nodeLabel ) );
+        return false;
+    }
+
+    DzFloatProperty* channel = injector.injectMorphByGuid( node, guid );
+    if ( !channel )
+    {
+        logOnly( tr( "Injection of '%1' onto '%2' failed: %3" )
+                     .arg( guid )
+                     .arg( node->getName() )
+                     .arg( injector.lastError() ) );
+        return false;
+    }
+
+    // Mirrors SceneManifestLoader::restore()'s own seed step exactly (see this
+    // method's header doc), so a value dialed here matches what a save/reload
+    // round trip will reproduce.
+    channel->setValue( static_cast<float>( value ) );
+
+    daz_plugin::SceneManifestWriter::refresh();
+
+    logOnly( tr( "Injected '%1' onto '%2' as morph channel '%3' and set it to %4." )
+                 .arg( guid )
+                 .arg( node->getName() )
+                 .arg( channel->getName() )
+                 .arg( channel->getValue() ) );
+    return true;
 }
 
 void DzMorphInjectorSmokeTestAction::executeAction()

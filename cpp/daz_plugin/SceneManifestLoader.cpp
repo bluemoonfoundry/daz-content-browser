@@ -66,7 +66,22 @@ void restoreEntry( InjectorCore& injector, const injector_core::InjectedMorphEnt
         return;
     }
 
-    channel->setValue( static_cast<float>( entry.val ) );
+    // Only meaningful for a plain (no-formula) channel: setValue() on a
+    // formula-driven channel is NOT overridden by its controller chain -- it
+    // is folded in as an additive term on the chain's base "sum" stage
+    // (confirmed live, daz-content-browser-jhq.6), so entry.val (the FULLY
+    // COMPUTED effective value captured at save time, not a raw seed) would
+    // corrupt the freshly-recomputed result rather than restore it. The
+    // injection path already carries this exact guard for the same reason
+    // (MorphInjectorSmokeTestAction::executeAction(), beads-w56); it was
+    // missing here. A controller-driven channel needs no help: its value
+    // re-derives correctly from its driving properties, which Daz Studio's
+    // own native scene serialization already restores independently of this
+    // manifest.
+    if ( channel->getNumControllers() == 0 )
+    {
+        channel->setValue( static_cast<float>( entry.val ) );
+    }
 }
 
 }  // namespace
