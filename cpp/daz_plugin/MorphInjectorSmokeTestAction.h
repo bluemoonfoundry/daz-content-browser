@@ -45,4 +45,16 @@ public:
 
 protected:
     virtual void executeAction();
+
+private slots:
+    /**
+        Subsystem C Task 4 (daz-content-browser-jhq.4): connected to
+        DzScene::sceneLoaded() (dzscene.h) from this class's constructor --
+        the connection point PluginMain.cpp's DZ_PLUGIN_DEFINITION comment
+        documents. Delegates to SceneManifestLoader::restore(); kept here
+        rather than in a dedicated QObject so the plugin has exactly one
+        Q_OBJECT class already known to construct once at plugin load, instead
+        of a second one built solely to own a slot.
+    **/
+    void onSceneLoaded();
 };

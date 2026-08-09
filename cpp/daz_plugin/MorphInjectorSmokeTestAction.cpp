@@ -11,6 +11,7 @@
 #include "dzscene.h"
 
 #include "InjectorCore.h"
+#include "SceneManifestLoader.h"
 #include "SceneManifestWriter.h"
 
 namespace {
@@ -100,6 +101,19 @@ DzMorphInjectorSmokeTestAction::DzMorphInjectorSmokeTestAction()
     // exactly as the SDK's own sample does
     // (samples/interface/AFirstPlugin/afirstpluginaction.cpp).
     setObjectName( DzMorphInjectorSmokeTestAction::metaObject()->className() );
+
+    // Subsystem C Task 4 (daz-content-browser-jhq.4): re-inject a saved
+    // scene's manifest as soon as it finishes loading. Registered DzAction
+    // subclasses are constructed once, at plugin load, by which point dzScene
+    // already exists -- so this connection is made unconditionally rather than
+    // guarded on dzScene being non-null (SceneManifestWriter.cpp's SDK-global
+    // dzScene pointer is always valid by the time any DzAction is constructed).
+    connect( dzScene, SIGNAL( sceneLoaded() ), this, SLOT( onSceneLoaded() ) );
+}
+
+void DzMorphInjectorSmokeTestAction::onSceneLoaded()
+{
+    daz_plugin::SceneManifestLoader::restore();
 }
 
 void DzMorphInjectorSmokeTestAction::executeAction()

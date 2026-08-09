@@ -197,6 +197,18 @@ public:
     **/
     static InjectorCore& sharedInstance();
 
+    /**
+        The live scene node whose name or label is `figureName`, or 0 if none
+        matches -- the scene-wide half of resolveNodeForFigure() (the
+        findNode -> findNodeByLabel fallback chain), exposed publicly so Task 4's
+        sceneLoaded() hook (SceneManifestLoader.cpp) can resolve a manifest
+        entry's target_figure to a node the same way an in-progress injection
+        would, without a live m_targetNode to compare against first (there is no
+        enclosing injection at scene-load time, so the fast-path short-circuit in
+        resolveNodeForFigure() does not apply here).
+    **/
+    DzNode* resolveFigureNode( const QString& figureName ) const;
+
 private:
     //! Steps 1-6 for one already-fetched record, against m_targetNode.
     DzFloatProperty* injectRecord( const injector_core::MorphRecord& record );

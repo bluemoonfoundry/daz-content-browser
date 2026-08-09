@@ -225,20 +225,22 @@ DzNode* InjectorCore::resolveNodeForFigure( const QString& figureName ) const
         return m_targetNode;
     }
 
-    if ( dzScene )
+    return resolveFigureNode( figureName );
+}
+
+DzNode* InjectorCore::resolveFigureNode( const QString& figureName ) const
+{
+    if ( !dzScene )
     {
-        DzNode* node = dzScene->findNode( figureName );
-        if ( !node )
-        {
-            node = dzScene->findNodeByLabel( figureName );
-        }
-        if ( node )
-        {
-            return node;
-        }
+        return 0;
     }
 
-    return 0;
+    DzNode* node = dzScene->findNode( figureName );
+    if ( !node )
+    {
+        node = dzScene->findNodeByLabel( figureName );
+    }
+    return node;
 }
 
 /*
