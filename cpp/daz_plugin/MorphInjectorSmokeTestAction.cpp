@@ -71,11 +71,34 @@ QString describeRegistry( const daz_plugin::InjectorCore& injector )
     return text;
 }
 
+/*
+    DAZ_MORPH_SMOKE_TEST_SILENT=1 skips the QMessageBox below and logs only.
+
+    Exists so this action can be triggered from a script (e.g. daz-script-server,
+    for scripted verification of Tasks 3/4's save/reload round trip) without
+    popping a modal dialog: QMessageBox::exec() runs its own nested event loop
+    on the GUI thread, and a script-server request that triggers this action is
+    itself blocking that same GUI thread waiting for the trigger() call to
+    return -- nothing can click "OK" on its behalf, so the whole app hangs until
+    a human physically dismisses it. Interactive menu use is unaffected: this
+    only matters for callers who both (a) invoke the action off-thread from
+    Daz Studio's own input handling and (b) cannot dismiss a dialog themselves.
+*/
+bool isSilentMode()
+{
+    return QString::fromLocal8Bit( qgetenv( "DAZ_MORPH_SMOKE_TEST_SILENT" ) ) == "1";
+}
+
 void report( const QString& message, bool ok )
 {
     if ( dzApp )
     {
         dzApp->log( QString( "[daz_plugin] smoke test: %1" ).arg( message ) );
+    }
+
+    if ( isSilentMode() )
+    {
+        return;
     }
 
     QWidget* parent = dzApp ? dzApp->getDialogParent() : 0;
