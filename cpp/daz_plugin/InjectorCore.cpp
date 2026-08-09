@@ -109,6 +109,12 @@ QString InjectorCore::defaultMorphCacheRoot()
     return envOr( "DAZ_MORPH_CACHE_DIR", "MORPH_CACHE_PATH", "morph_cache" );
 }
 
+InjectorCore& InjectorCore::sharedInstance()
+{
+    static InjectorCore instance( defaultMorphIndexDbPath(), defaultMorphCacheRoot() );
+    return instance;
+}
+
 void InjectorCore::logInfo( const QString& message ) const
 {
     if ( dzApp )

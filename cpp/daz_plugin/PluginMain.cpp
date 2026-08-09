@@ -13,6 +13,7 @@
 
 #include "MorphInjectorSmokeTestAction.h"
 #include "SceneManifestData.h"
+#include "SceneManifestDataIO.h"
 #include "version.h"
 
 /*****************************
@@ -24,6 +25,17 @@
     getPluginDefinition() exports (and DllMain on Windows) that Daz Studio
     needs in order to load this DLL. See dzmorphinjector.def for why those two
     exports are also listed in a module-definition file.
+
+    Plain DZ_PLUGIN_DEFINITION rather than DZ_CUSTOM_PLUGIN_DEFINITION: the
+    DZ_PLUGIN_REGISTER_SCENEDATA_EXTRA_OBJECT_IO macro below (dzplugin.h)
+    expands to code that references the file-scope `s_pluginDef` global this
+    macro declares by name; DZ_CUSTOM_PLUGIN_DEFINITION instead hides its
+    plugin instance inside a function-local static, which that macro cannot
+    see. A previous version of this file used the custom form to defer
+    SceneManifestWriter's dzScene connection past plugin-load time, but
+    connecting from DzMorphInjectorSmokeTestAction's own constructor (see
+    MorphInjectorSmokeTestAction.cpp) turned out to work fine and avoids this
+    conflict entirely.
 **/
 DZ_PLUGIN_DEFINITION( "Daz Morph Injector" );
 
@@ -75,4 +87,16 @@ DZ_PLUGIN_CLASS_GUID( DzMorphInjectorSmokeTestAction, B0E93757-286C-4147-9895-40
 **/
 namespace daz_plugin {
 DZ_PLUGIN_CLASS_GUID( SceneManifestData, 5A8E01CB-E7D4-40F7-ADFA-9C3760F023E1 );
+
+/**
+    Registers SceneManifestDataIO (Subsystem C Task 3, daz-content-browser-jhq.3)
+    as the DSON (.duf) read/write bridge for SceneManifestData -- see
+    SceneManifestDataIO.h for why this, and not SceneManifestData's own
+    loadSection()/save(), is what actually gets the manifest into a saved .duf.
+    Registers under DSON type "studio/scene_data/scene_manifest"
+    (DZ_PLUGIN_REGISTER_SCENEDATA_EXTRA_OBJECT_IO prefixes the tag with
+    "studio/scene_data/", dzplugin.h).
+**/
+DZ_PLUGIN_CLASS_GUID( SceneManifestDataIO, 8F3C2A11-6B4D-4E2A-9F7E-2D5B8C9A1F04 );
+DZ_PLUGIN_REGISTER_SCENEDATA_EXTRA_OBJECT_IO( "scene_manifest", SceneManifestDataIO, SceneManifestData );
 }  // namespace daz_plugin

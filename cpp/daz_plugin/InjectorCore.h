@@ -182,6 +182,21 @@ public:
     static QString defaultMorphIndexDbPath();
     static QString defaultMorphCacheRoot();
 
+    /**
+        The single InjectorCore instance for this Daz Studio session, constructed
+        against defaultMorphIndexDbPath()/defaultMorphCacheRoot() on first call.
+
+        Session-lived so that injectedMorphs() accumulates across every caller
+        within one run: the smoke-test action (MorphInjectorSmokeTestAction.cpp)
+        and Task 3's sceneSaveStarting() hook (SceneManifestWriter.cpp) both need
+        to see the SAME registry -- otherwise a save immediately after an
+        injection would find nothing to write. Constructed lazily rather than at
+        plugin load so it only ever runs on the GUI thread that first calls in
+        (matching every other InjectorCore entry point's threading contract),
+        with a function-local static for thread-safe-once initialization.
+    **/
+    static InjectorCore& sharedInstance();
+
 private:
     //! Steps 1-6 for one already-fetched record, against m_targetNode.
     DzFloatProperty* injectRecord( const injector_core::MorphRecord& record );

@@ -1,6 +1,5 @@
 #include "MorphInjectorSmokeTestAction.h"
 
-#include <memory>
 #include <vector>
 
 #include <QtCore/QString>
@@ -12,6 +11,7 @@
 #include "dzscene.h"
 
 #include "InjectorCore.h"
+#include "SceneManifestWriter.h"
 
 namespace {
 
@@ -46,25 +46,6 @@ QString smokeTestGuid()
 {
     const QString fromEnv = QString::fromLocal8Bit( qgetenv( "DAZ_MORPH_SMOKE_TEST_GUID" ) );
     return fromEnv.isEmpty() ? QString::fromLatin1( kDefaultSmokeTestGuid ) : fromEnv;
-}
-
-/*
-    beads-jhq.2's acceptance criterion asks to inject 2-3 morphs via this
-    action and confirm InjectorCore's registry accumulates them, which requires
-    the SAME InjectorCore instance to survive across separate clicks -- unlike
-    executeAction()'s per-call local before this, whose registry would reset on
-    every click. Function-local static rather than a class member so no header
-    change is needed for what is still scaffolding (see the file header);
-    GUI-thread-only per DzAction::executeAction()'s contract, matching
-    InjectorCore's own single-thread requirement, so no synchronisation is
-    needed around the static's first-use initialization.
-*/
-daz_plugin::InjectorCore& sharedInjector()
-{
-    static std::unique_ptr<daz_plugin::InjectorCore> instance(
-        new daz_plugin::InjectorCore( daz_plugin::InjectorCore::defaultMorphIndexDbPath(),
-                                      daz_plugin::InjectorCore::defaultMorphCacheRoot() ) );
-    return *instance;
 }
 
 //! One line per registered morph, for the manual-verification report below.
@@ -136,11 +117,12 @@ void DzMorphInjectorSmokeTestAction::executeAction()
 
     const QString guid = smokeTestGuid();
 
-    // Shared across clicks (sharedInjector()) rather than constructed per call:
-    // beads-jhq.2's registry is session-lived by design, and the only way to
-    // manually verify that from this action is to keep injecting into the same
-    // InjectorCore instance run after run.
-    daz_plugin::InjectorCore& injector = sharedInjector();
+    // Shared across clicks (InjectorCore::sharedInstance()) rather than
+    // constructed per call: beads-jhq.2's registry is session-lived by design,
+    // and Task 3's SceneManifestWriter::refresh() (SceneManifestWriter.cpp)
+    // needs to see the same registry this action injects into, not a copy
+    // local to this action.
+    daz_plugin::InjectorCore& injector = daz_plugin::InjectorCore::sharedInstance();
     if ( !injector.isOpen() )
     {
         report( tr( "Could not open the morph index: %1" ).arg( injector.lastError() ), false );
@@ -174,6 +156,12 @@ void DzMorphInjectorSmokeTestAction::executeAction()
     {
         channel->setValue( channel->getMax() );
     }
+
+    // Task 3 (daz-content-browser-jhq.3): keep the saved-scene manifest
+    // current the moment the registry changes, rather than trying to catch it
+    // at save time -- see SceneManifestWriter.h for why no DzScene save signal
+    // turned out to be a reliable hook for this in a real Daz Studio session.
+    daz_plugin::SceneManifestWriter::refresh();
 
     report( tr( "Injected '%1' onto '%2' as morph channel '%3' and set it to %4.\n\n"
                 "InjectorCore registry now has %5 entr%6:\n%7" )

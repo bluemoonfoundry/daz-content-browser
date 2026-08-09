@@ -45,6 +45,8 @@ add_library(${DZ_PLUGIN_TGT_NAME} SHARED
     InjectorCore.cpp
     MorphInjectorSmokeTestAction.cpp
     SceneManifestData.cpp
+    SceneManifestDataIO.cpp
+    SceneManifestWriter.cpp
     ${DZ_PLUGIN_OS_SOURCES}
 )
 
