@@ -62,6 +62,7 @@ add_library(injector_core STATIC
     TmbReader.cpp
     MorphIndexReader.cpp
     FormulaCompiler.cpp
+    SceneManifest.cpp
 )
 
 target_include_directories(injector_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

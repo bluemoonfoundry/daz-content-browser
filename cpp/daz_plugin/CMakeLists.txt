@@ -44,6 +44,7 @@ add_library(${DZ_PLUGIN_TGT_NAME} SHARED
     FormulaControllerBuilder.cpp
     InjectorCore.cpp
     MorphInjectorSmokeTestAction.cpp
+    SceneManifestData.cpp
     ${DZ_PLUGIN_OS_SOURCES}
 )
 

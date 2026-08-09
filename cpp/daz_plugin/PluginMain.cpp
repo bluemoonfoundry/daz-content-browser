@@ -12,6 +12,7 @@
 #include "dzapp.h"
 
 #include "MorphInjectorSmokeTestAction.h"
+#include "SceneManifestData.h"
 #include "version.h"
 
 /*****************************
@@ -58,3 +59,20 @@ DZ_PLUGIN_DESCRIPTION( QString(
     page in the Daz Studio SDK documentation).
 **/
 DZ_PLUGIN_CLASS_GUID( DzMorphInjectorSmokeTestAction, B0E93757-286C-4147-9895-4019E6A837EB );
+
+/**
+    Registers SceneManifestData (Subsystem C Task 1, daz-content-browser-jhq.1) so
+    Daz Studio's file loader can reconstruct it by class GUID when a saved .duf's
+    DzElementData chunk is read back (the same DzTClassFactory mechanism the SDK
+    uses for every persistent DzBase subclass), and so it is newable from DazScript
+    for manual verification.
+
+    Invoked inside daz_plugin's own namespace (rather than passing a
+    "daz_plugin::"-qualified typeName to the macro) because DZ_PLUGIN_CLASS_GUID
+    token-pastes typeName directly onto GUID/Factory suffixes and then defines
+    those pasted names as new (not out-of-line) class/variable declarations --
+    which requires typeName to be a single unqualified identifier in scope.
+**/
+namespace daz_plugin {
+DZ_PLUGIN_CLASS_GUID( SceneManifestData, 5A8E01CB-E7D4-40F7-ADFA-9C3760F023E1 );
+}  // namespace daz_plugin

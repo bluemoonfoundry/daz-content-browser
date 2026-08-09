@@ -14,6 +14,7 @@ add_executable(injector_core_tests
     test_tmb_reader.cpp
     test_morph_index_reader.cpp
     test_formula_compiler.cpp
+    test_scene_manifest.cpp
 )
 
 target_link_libraries(injector_core_tests PRIVATE
