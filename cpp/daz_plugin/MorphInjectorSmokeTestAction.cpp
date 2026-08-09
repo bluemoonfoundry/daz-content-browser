@@ -1,5 +1,8 @@
 #include "MorphInjectorSmokeTestAction.h"
 
+#include <memory>
+#include <vector>
+
 #include <QtCore/QString>
 #include <QtGui/QMessageBox>
 
@@ -43,6 +46,47 @@ QString smokeTestGuid()
 {
     const QString fromEnv = QString::fromLocal8Bit( qgetenv( "DAZ_MORPH_SMOKE_TEST_GUID" ) );
     return fromEnv.isEmpty() ? QString::fromLatin1( kDefaultSmokeTestGuid ) : fromEnv;
+}
+
+/*
+    beads-jhq.2's acceptance criterion asks to inject 2-3 morphs via this
+    action and confirm InjectorCore's registry accumulates them, which requires
+    the SAME InjectorCore instance to survive across separate clicks -- unlike
+    executeAction()'s per-call local before this, whose registry would reset on
+    every click. Function-local static rather than a class member so no header
+    change is needed for what is still scaffolding (see the file header);
+    GUI-thread-only per DzAction::executeAction()'s contract, matching
+    InjectorCore's own single-thread requirement, so no synchronisation is
+    needed around the static's first-use initialization.
+*/
+daz_plugin::InjectorCore& sharedInjector()
+{
+    static std::unique_ptr<daz_plugin::InjectorCore> instance(
+        new daz_plugin::InjectorCore( daz_plugin::InjectorCore::defaultMorphIndexDbPath(),
+                                      daz_plugin::InjectorCore::defaultMorphCacheRoot() ) );
+    return *instance;
+}
+
+//! One line per registered morph, for the manual-verification report below.
+QString describeRegistry( const daz_plugin::InjectorCore& injector )
+{
+    const std::vector<daz_plugin::InjectorCore::InjectedMorphRecord>& registry =
+        injector.injectedMorphs();
+    if ( registry.empty() )
+    {
+        return QObject::tr( "(registry is empty)" );
+    }
+
+    QString text;
+    for ( size_t i = 0; i < registry.size(); ++i )
+    {
+        const daz_plugin::InjectorCore::InjectedMorphRecord& entry = registry[i];
+        text += QString( "  morph_id %1 on '%2': val=%3\n" )
+                    .arg( entry.morphId )
+                    .arg( entry.node ? entry.node->getName() : QString( "<null>" ) )
+                    .arg( entry.channel ? entry.channel->getValue() : 0.0 );
+    }
+    return text;
 }
 
 void report( const QString& message, bool ok )
@@ -91,19 +135,15 @@ void DzMorphInjectorSmokeTestAction::executeAction()
     }
 
     const QString guid = smokeTestGuid();
-    const QString dbPath = daz_plugin::InjectorCore::defaultMorphIndexDbPath();
-    const QString cacheRoot = daz_plugin::InjectorCore::defaultMorphCacheRoot();
 
-    // Constructed per invocation: the smoke test is a one-shot, and a fresh
-    // read-only sqlite handle costs nothing next to the injection itself.
-    // Subsystem D will want a session-lived instance instead.
-    daz_plugin::InjectorCore injector( dbPath, cacheRoot );
+    // Shared across clicks (sharedInjector()) rather than constructed per call:
+    // beads-jhq.2's registry is session-lived by design, and the only way to
+    // manually verify that from this action is to keep injecting into the same
+    // InjectorCore instance run after run.
+    daz_plugin::InjectorCore& injector = sharedInjector();
     if ( !injector.isOpen() )
     {
-        report( tr( "Could not open the morph index at '%1': %2" )
-                    .arg( dbPath )
-                    .arg( injector.lastError() ),
-                false );
+        report( tr( "Could not open the morph index: %1" ).arg( injector.lastError() ), false );
         return;
     }
 
@@ -135,10 +175,14 @@ void DzMorphInjectorSmokeTestAction::executeAction()
         channel->setValue( channel->getMax() );
     }
 
-    report( tr( "Injected '%1' onto '%2' as morph channel '%3' and set it to %4." )
+    report( tr( "Injected '%1' onto '%2' as morph channel '%3' and set it to %4.\n\n"
+                "InjectorCore registry now has %5 entr%6:\n%7" )
                 .arg( guid )
                 .arg( node->getName() )
                 .arg( channel->getName() )
-                .arg( channel->getValue() ),
+                .arg( channel->getValue() )
+                .arg( injector.injectedMorphs().size() )
+                .arg( injector.injectedMorphs().size() == 1 ? tr( "y" ) : tr( "ies" ) )
+                .arg( describeRegistry( injector ) ),
             true );
 }

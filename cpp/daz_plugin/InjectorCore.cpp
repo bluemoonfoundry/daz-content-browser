@@ -387,6 +387,36 @@ DzFloatProperty* InjectorCore::injectById( int64_t morphId, bool retargetToOwnFi
     return channel;
 }
 
+/*
+    Populates/updates m_registry -- see the member comment (InjectorCore.h) for
+    why this is session-lived rather than per-top-level-call like
+    m_valueChannels. m_targetNode is used rather than record.target_figure's
+    resolved node re-derived from scratch: by the time either injectRecord()
+    caller reaches this point, m_targetNode already IS that resolved node
+    (daz-content-browser-e9y retargeting happens in injectById() before
+    injectRecord() is ever called).
+*/
+void InjectorCore::registerInjectedMorph( const injector_core::MorphRecord& record,
+                                          DzFloatProperty* channel )
+{
+    for ( size_t i = 0; i < m_registry.size(); ++i )
+    {
+        if ( m_registry[i].morphId == record.morph_id && m_registry[i].node == m_targetNode )
+        {
+            m_registry[i].channel = channel;
+            return;
+        }
+    }
+
+    InjectedMorphRecord entry;
+    entry.morphId = record.morph_id;
+    entry.guid = toQString( record.guid );
+    entry.targetFigure = toQString( record.target_figure );
+    entry.node = m_targetNode;
+    entry.channel = channel;
+    m_registry.push_back( entry );
+}
+
 DzFloatProperty* InjectorCore::injectRecord( const injector_core::MorphRecord& record )
 {
     const QString name = toQString( record.name );
@@ -419,6 +449,7 @@ DzFloatProperty* InjectorCore::injectRecord( const injector_core::MorphRecord& r
         if ( channel )
         {
             m_valueChannels[record.morph_id] = channel;
+            registerInjectedMorph( record, channel );
         }
         return channel;
     }
@@ -436,6 +467,7 @@ DzFloatProperty* InjectorCore::injectRecord( const injector_core::MorphRecord& r
     // Published *before* dependencies and formulas are wired: that is what makes
     // a re-entrant call for this same morph terminate with a usable property.
     m_valueChannels[record.morph_id] = channel;
+    registerInjectedMorph( record, channel );
 
     // --- Step 5: dependencies first (design section 3.2 #5) ------------------
     // Depth-first and before step 6, so that every operand this morph's formula

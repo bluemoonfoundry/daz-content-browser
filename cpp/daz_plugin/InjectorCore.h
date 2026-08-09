@@ -55,6 +55,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <vector>
 
 #include <QtCore/QString>
 
@@ -79,6 +80,25 @@ namespace daz_plugin {
 class InjectorCore : public MorphInjectionEnsurer
 {
 public:
+    /**
+        One morph InjectorCore has successfully injected during this object's
+        lifetime: enough to both identify it (guid/target_figure -- the same pair
+        Task 3's manifest serializes, see injector_core::InjectedMorphEntry in
+        SceneManifest.h) and read its live state back out (node + channel).
+
+        `node` and `channel` are raw SDK pointers into the live scene, not
+        owned here and not re-validated on every access -- see m_registry below
+        for why that is safe under this design's read-lazily-at-save-time rule.
+    **/
+    struct InjectedMorphRecord
+    {
+        int64_t morphId = 0;
+        QString guid;
+        QString targetFigure;
+        DzNode* node = 0;
+        DzFloatProperty* channel = 0;
+    };
+
     /**
         @param morphIndexDbPath  path to Subsystem A's morph_index.db.
         @param morphCacheRoot    root that MorphRecord::tmb_path is relative to
@@ -131,6 +151,27 @@ public:
     virtual DzNumericProperty* ensureInjectedAndGetValueChannel( int64_t morphId );
 
     /**
+        Every morph InjectorCore has successfully injected during this object's
+        lifetime (i.e. across every top-level injectMorph (or
+        ensureInjectedAndGetValueChannel) call so far, not just the most recent
+        one -- unlike m_valueChannels/m_inFlight, this is NOT cleared when a
+        top-level call returns).
+
+        Entries are deduplicated on (node, morph_id), NOT morph_id alone: two
+        separate instances of the same figure in the scene (e.g. two "Genesis
+        9" clones) can each legitimately carry their own injection of the same
+        morph, onto two different DzObject::findModifier() targets, and each
+        needs its own manifest row. Keying by morph_id alone would silently
+        collapse the second instance's entry into the first's.
+
+        This is what Task 3's sceneSaveStarting() hook walks to build the saved
+        manifest (reading channel->getValue() lazily, per this class's header
+        note on not hooking per-property change signals), and what Task 4's
+        sceneLoaded() hook re-derives after scene reopen re-injects everything.
+    **/
+    const std::vector<InjectedMorphRecord>& injectedMorphs() const { return m_registry; }
+
+    /**
         Default locations, read from the environment so a Daz Studio session can
         be pointed at a specific index without a rebuild. Falls back to the same
         variable names src/main.py already uses, then to the repo-root defaults.
@@ -144,6 +185,18 @@ public:
 private:
     //! Steps 1-6 for one already-fetched record, against m_targetNode.
     DzFloatProperty* injectRecord( const injector_core::MorphRecord& record );
+
+    /**
+        Records (or updates, if an entry for the same (node, morph_id) already
+        exists) `record`'s entry in m_registry, against whatever node it
+        actually landed on -- m_targetNode at the point of the call, which by
+        the time injectRecord() reaches either of its return paths already
+        reflects any daz-content-browser-e9y retargeting. Called from both
+        injectRecord() branches (existing-modifier hit and newly-created), so a
+        session's registry covers morphs this object merely rediscovered via
+        DzObject::findModifier() as well as ones it actually created.
+    **/
+    void registerInjectedMorph( const injector_core::MorphRecord& record, DzFloatProperty* channel );
 
     /**
         find_by_id + injectRecord, with the re-entrancy guards applied.
@@ -238,6 +291,29 @@ private:
         duplicate check instead, which reads the live scene rather than a cache.
     **/
     std::map<int64_t, DzFloatProperty*> m_valueChannels;
+
+    /**
+        Session-lived record of every morph successfully injected so far,
+        deduplicated on (node, morph_id) -- see injectedMorphs() above for why
+        morph_id alone is not a safe key. Unlike m_valueChannels/m_inFlight,
+        this survives past the outermost injectMorph* call returning -- it is
+        what Task 3/Task 4's save and load hooks read.
+
+        A std::vector rather than a map: entries are found by linear scan in
+        registerInjectedMorph() (a session realistically accumulates dozens to
+        low hundreds of injections, not a count where that scan is measurable
+        next to the delta-loading/formula-compilation work each injection
+        already does), and enumeration -- the whole point of this member --
+        gets insertion order for free instead of morph_id order.
+
+        Deliberately not kept fresh against scene edits (a node/modifier deleted
+        after injection leaves a stale entry here): the acceptance criterion is
+        enumerating what THIS OBJECT has injected, not re-validating the live
+        scene on every access. A save-time consumer that dereferences a stale
+        pointer is a pre-existing hazard shared with m_valueChannels, not one
+        introduced here.
+    **/
+    std::vector<InjectedMorphRecord> m_registry;
 };
 
 }  // namespace daz_plugin
