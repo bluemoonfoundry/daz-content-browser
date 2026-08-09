@@ -1,5 +1,6 @@
 #include "PropertySourceAdapter.h"
 
+#include <QtCore/QStringList>
 #include <QtCore/QUrl>
 
 #include "dzbone.h"
@@ -179,21 +180,103 @@ DzNumericProperty* PropertySourceAdapter::resolveNodeChannel( DzNode* node, cons
 }
 
 /*
+    Resolves `label` (the DSON operand label prefix, e.g. "Genesis9/l_eye") to
+    the figure root it names, then searches specifically within THAT figure's
+    own hierarchy for `elementName` -- never ctx.node's, even if ctx.node
+    happens to have a same-named node of its own (beads-caw: Genesis 9's
+    companion figures -- Genesis9Eyes, Genesis9Eyelashes, ... -- each duplicate
+    the base figure's bone names for rigging/skinning, so an unscoped search
+    can silently resolve to the wrong figure's copy).
+
+    The label's own grammar is not fully specified by the design doc beyond
+    "the DSON asset/scene-id prefix"; observed real content uses both a bare
+    figure id ("Cloak") and a compound "FigureId/NodeId" form (as in the
+    "Genesis9/l_eye" example above). Trying the label whole first, then its
+    last '/'-segment, covers both without needing to fully parse DSON's label
+    grammar.
+*/
+DzNode* PropertySourceAdapter::resolveNodeViaLabel( const QString& elementName, const QString& label )
+{
+    if ( label.isEmpty() || !dzScene )
+    {
+        return 0;
+    }
+
+    QStringList candidates;
+    candidates << label;
+    const int slashIdx = label.lastIndexOf( QLatin1Char( '/' ) );
+    if ( slashIdx >= 0 )
+    {
+        candidates << label.left( slashIdx );
+    }
+
+    for ( int i = 0; i < candidates.size(); ++i )
+    {
+        const QString& figureId = candidates[i];
+        DzNode* figureRoot = dzScene->findNode( figureId );
+        if ( !figureRoot )
+        {
+            figureRoot = dzScene->findNodeByLabel( figureId );
+        }
+        if ( !figureRoot )
+        {
+            continue;
+        }
+
+        if ( figureRoot->getName() == elementName )
+        {
+            return figureRoot;
+        }
+
+        DzSkeleton* skeleton = figureRoot->getSkeleton();
+        if ( skeleton )
+        {
+            DzBone* bone = skeleton->findBone( elementName );
+            if ( bone )
+            {
+                return bone;
+            }
+        }
+
+        DzNode* child = figureRoot->findNodeChild( elementName, true );
+        if ( child )
+        {
+            return child;
+        }
+    }
+
+    return 0;
+}
+
+/*
     Which node an operand's `element` names.
 
-    Search order, narrowest first, so a bone name that happens to collide with an
-    unrelated scene node resolves to the figure-local bone:
-      1. empty element   -> the context node itself (a self-relative operand)
-      2. the context node's own name
-      3. a bone of the context node's skeleton (DzSkeleton::findBone)
-      4. any descendant of the context node (findNodeChild, scanHierarchy=true)
-      5. a scene-global node lookup (DzScene::findNode / findNodeByLabel)
+    Search order, most specific first:
+      1. empty element      -> the context node itself (a self-relative operand)
+      2. `label`-scoped      -> the specific figure `label` names, searched via
+                                resolveNodeViaLabel() (beads-caw). Tried before
+                                ctx.node's own hierarchy because the whole point
+                                of a label is to disambiguate from ctx.node's
+                                figure -- an operand carrying a label that names
+                                a DIFFERENT figure than ctx.node must not resolve
+                                against ctx.node's own same-named node.
+      3. the context node's own name
+      4. a bone of the context node's skeleton (DzSkeleton::findBone)
+      5. any descendant of the context node (findNodeChild, scanHierarchy=true)
+      6. a scene-global node lookup (DzScene::findNode / findNodeByLabel)
 */
-DzNode* PropertySourceAdapter::resolveNode( const QString& elementName, const ResolutionContext& ctx )
+DzNode* PropertySourceAdapter::resolveNode( const QString& elementName, const QString& label,
+                                            const ResolutionContext& ctx )
 {
     if ( elementName.isEmpty() )
     {
         return ctx.node;
+    }
+
+    DzNode* viaLabel = resolveNodeViaLabel( elementName, label );
+    if ( viaLabel )
+    {
+        return viaLabel;
     }
 
     if ( ctx.node )
@@ -350,7 +433,7 @@ DzNumericProperty* PropertySourceAdapter::resolve( const QString& operand, const
     //    "Cloak:/data/.../GnHdCloak_G3_23369.dsf#Cloak?rotation/x" (design section 2).
     if ( isNodeChannel( ref.property ) )
     {
-        DzNode* node = resolveNode( ref.element, ctx );
+        DzNode* node = resolveNode( ref.element, ref.label, ctx );
         if ( !node )
         {
             m_lastError = QString( "operand '%1': no scene node named '%2'" )
@@ -379,7 +462,7 @@ DzNumericProperty* PropertySourceAdapter::resolve( const QString& operand, const
     //    (a morph shipped with the figure, a control property, ...). For the
     //    pathless "#PropertyName?value" shape the *element* is the property
     //    name; the trailing "?value" is just its channel selector.
-    DzNode* node = resolveNode( QString(), ctx );  // properties resolve on the context node
+    DzNode* node = resolveNode( QString(), QString(), ctx );  // properties resolve on the context node
     prop = resolveSceneProperty( node, ref.element );
     if ( !prop )
     {

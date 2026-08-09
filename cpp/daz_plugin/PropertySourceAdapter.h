@@ -147,7 +147,19 @@ private:
     DzNumericProperty* resolveNodeChannel( DzNode* node, const QString& property );
 
     //! Finds the DzNode an operand's `element` names, relative to ctx.
-    DzNode* resolveNode( const QString& elementName, const ResolutionContext& ctx );
+    DzNode* resolveNode( const QString& elementName, const QString& label,
+                        const ResolutionContext& ctx );
+
+    /**
+        Scopes a node search to the specific figure `label` names, rather than
+        assuming ctx.node's own figure (beads-caw). `label` is the DSON operand
+        label prefix, e.g. "Genesis9/l_eye" for an operand driven by Genesis9's
+        own l_eye bone even when attached to a morph on a companion figure
+        (Genesis9Eyes) that has its OWN same-named "l_eye" bone. Returns 0 if
+        `label` is empty, names no resolvable figure root, or that figure's own
+        hierarchy has no node named `elementName`.
+    **/
+    DzNode* resolveNodeViaLabel( const QString& elementName, const QString& label );
 
     //! Morph-index lookup + ensureInjected for an operand that names a morph.
     DzNumericProperty* resolveIndexedMorph( const OperandRef& ref, const ResolutionContext& ctx );
