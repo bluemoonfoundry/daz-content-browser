@@ -20,13 +20,19 @@ help:                ## Show available targets
 # ── Setup ──────────────────────────────────────────────────────────────────────
 
 install:             ## Install Python deps and UI node modules
-	git submodule update --init ui/src
 	pip install -e ".[local_llm]"
 	# chromadb/optimum pull in plain onnxruntime transitively, which fights with
 	# onnxruntime-directml for the same import namespace; force it to win so GPU
 	# acceleration is actually active instead of a silent CPU fallback.
 	pip install --no-deps --force-reinstall onnxruntime-directml
-	cd $(UI_SRC) && npm ci
+	@if git submodule update --init ui/src; then \
+		cd $(UI_SRC) && npm ci; \
+	else \
+		echo ""; \
+		echo "WARNING: could not init the ui/src submodule (it's a private repo)."; \
+		echo "Skipping UI node module install. The pre-built UI in ui/dist/ still works via ./run.sh"; \
+		echo "UI source development (--dev-ui, 'make build', 'make dev-ui') requires access to the private submodule."; \
+	fi
 
 install-torch-cpu:   ## Install CPU-only PyTorch (no GPU required)
 	pip install torch --index-url https://download.pytorch.org/whl/cpu
