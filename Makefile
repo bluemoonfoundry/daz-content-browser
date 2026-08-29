@@ -19,9 +19,15 @@ help:                ## Show available targets
 # ── Setup ──────────────────────────────────────────────────────────────────────
 
 install:             ## Install Python deps and UI node modules
-	git submodule update --init ui/src
 	pip install -e ".[local_llm]"
-	cd $(UI_SRC) && npm ci
+	@if git submodule update --init ui/src; then \
+		cd $(UI_SRC) && npm ci; \
+	else \
+		echo ""; \
+		echo "WARNING: could not init the ui/src submodule (it's a private repo)."; \
+		echo "Skipping UI node module install. The pre-built UI in ui/dist/ still works via ./run.sh"; \
+		echo "UI source development (--dev-ui, 'make build', 'make dev-ui') requires access to the private submodule."; \
+	fi
 
 install-dev:         ## Install runtime + testing + quality tool dependencies
 	pip install -e ".[testing,dev]"

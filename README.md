@@ -548,6 +548,9 @@ make install-torch-cpu  # CPU PyTorch (or install CUDA version manually)
 make build              # build UI into ui/dist/
 ```
 
+> [!NOTE]
+> The `ui/src` submodule (`bmf-daz-content-browser-ui`) is a **private** repository, so `make install` can't clone it for outside contributors — it will print a warning and skip the UI node module install rather than fail. Everything else (Python deps, running the server against the pre-built UI) works normally. UI source isn't currently open for external contribution; the pre-built UI in `ui/dist/` is committed to this repo and kept up to date, so it's the only way to run the UI without submodule access.
+
 For development, you can run:
 
 | Command | Mode | UI | Access URL |
@@ -557,7 +560,7 @@ For development, you can run:
 | `./run.sh --dev-ui` | Production | Vite with hot-reload | `http://localhost:5173` |
 | `./run.sh --demo --dev-ui` | Demo | Vite with hot-reload | `http://localhost:5173` |
 
-> Note: The `--dev-ui` flag requires the `ui/src/` submodule to be present. Without it, use the pre-built UI at `:8000`.
+> Note: The `--dev-ui` flag (and `make build` / `make dev-ui`) requires the `ui/src/` submodule to be present, which in turn requires access to the private frontend repo. Without it, use the pre-built UI at `:8000`.
 
 ### Makefile targets
 
