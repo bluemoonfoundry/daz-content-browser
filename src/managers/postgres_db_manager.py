@@ -8,7 +8,6 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from utilities import fetch_json_from_url, fetch_html_content, async_fetch_json_from_url, async_fetch_html_content
-from managers.managers import chroma_db_manager, sqlite_db, daz_pg_analyzer
 from embedding_utils import generate_embeddings
 import re
 from collections import Counter
@@ -359,7 +358,7 @@ def determine_compatibility(product_data: dict, figure_names: list) -> dict:
         'tags_to_append': compat_str or '' # Always use the original string for tags
     }
 
-def main(args, on_progress=None, cancel_check=None):
+def main(args, on_progress=None, cancel_check=None, sqlite_db=None, chroma_db_manager=None, daz_pg_analyzer=None):
     """Main ETL and Embedding pipeline with command-line arguments.
 
     Args:
@@ -367,6 +366,7 @@ def main(args, on_progress=None, cancel_check=None):
         on_progress (callable, optional): Progress callback with signature
             on_progress(stage: str, current: int, total: int, detail: str).
             Called after each ETL product and each embedding batch.
+        sqlite_db, chroma_db_manager, daz_pg_analyzer: Manager instances (required).
     """
     logger.debug(f"ETL args: {args}")
 

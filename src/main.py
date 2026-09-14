@@ -18,11 +18,22 @@ from output_formatters import print_pretty, print_json, print_table
 from utilities import open_daz_product
 import uvicorn
 
-from managers.managers import chroma_db_manager, sqlite_db
-
 def load_command(args):
     """Loads data from DAZ Postgres to SQLite and ChromaDB."""
     from managers.postgres_db_manager import main as load_dazdb_content
+    from managers.chroma_db_manager import ChromaDbManager
+    from managers.sqlite_db_manager import SQLiteWrapper
+    from managers.daz_db_analyzer import DazDBAnalyzer
+
+    chroma_db_manager = ChromaDbManager(
+        os.environ.get("CHROMA_PATH", "chroma_db"),
+        os.environ.get("CHROMA_COLLECTION", "daz_products2")
+    )
+    sqlite_db = SQLiteWrapper(
+        sqlite_db_path=os.environ.get("SQLITE_DB_PATH"),
+        sqlite_db_table=os.environ.get("SQLITE_TABLE_NAME")
+    )
+    daz_pg_analyzer = DazDBAnalyzer()
 
     with Progress(
         SpinnerColumn(),
@@ -52,11 +63,21 @@ def load_command(args):
                     description="Embedding ",
                 )
 
-        load_dazdb_content(args, on_progress=on_progress)
+        load_dazdb_content(args, on_progress=on_progress,
+                          sqlite_db=sqlite_db,
+                          chroma_db_manager=chroma_db_manager,
+                          daz_pg_analyzer=daz_pg_analyzer)
 
 def query_command(args):
     """Submits a query to the ChromaDB and prints the formatted results."""
+    from managers.chroma_db_manager import ChromaDbManager
+
     print("Starting query command...")
+
+    chroma_db_manager = ChromaDbManager(
+        os.environ.get("CHROMA_PATH", "chroma_db"),
+        os.environ.get("CHROMA_COLLECTION", "daz_products2")
+    )
 
     # The search function returns a dictionary with 'total_hits', 'results', etc.
     response = chroma_db_manager.search(
@@ -71,7 +92,7 @@ def query_command(args):
     if not response or not response.get("results"):
         print("\n--- No results found for your query. ---")
         return
-    
+
     if args.format == 'json':
         print_json(response)
     elif args.format == 'table':
@@ -81,8 +102,20 @@ def query_command(args):
 
 def stats_command(args):
     """Gathers and prints statistics about the ChromaDB collection."""
+    from managers.chroma_db_manager import ChromaDbManager
+    from managers.sqlite_db_manager import SQLiteWrapper
 
     print("Gathering statistics from the database...")
+
+    chroma_db_manager = ChromaDbManager(
+        os.environ.get("CHROMA_PATH", "chroma_db"),
+        os.environ.get("CHROMA_COLLECTION", "daz_products2")
+    )
+    sqlite_db = SQLiteWrapper(
+        sqlite_db_path=os.environ.get("SQLITE_DB_PATH"),
+        sqlite_db_table=os.environ.get("SQLITE_TABLE_NAME")
+    )
+
     stats = chroma_db_manager.get_db_stats()
     last_update = sqlite_db.get_last_updated()
     filter_values = sqlite_db.get_filter_values()

@@ -11,7 +11,7 @@ TASK_FINISHED = 0
 TASK_ERROR    = -1
 
 
-def run_update_flow(task_status: dict, force: bool = False):
+def run_update_flow(task_status: dict, force: bool = False, sqlite_db=None, chroma_db_manager=None, daz_pg_analyzer=None):
     """Runs the full update flow for DAZ product data."""
     args = argparse.Namespace(force=force, all=False, phase='all', limit=None)
 
@@ -31,7 +31,8 @@ def run_update_flow(task_status: dict, force: bool = False):
             "progress": "Starting data upload...",
         })
 
-        run_daz_load(args, on_progress=on_progress, cancel_check=cancel_check)
+        run_daz_load(args, on_progress=on_progress, cancel_check=cancel_check,
+                     sqlite_db=sqlite_db, chroma_db_manager=chroma_db_manager, daz_pg_analyzer=daz_pg_analyzer)
 
         if cancel_check():
             task_status.update({

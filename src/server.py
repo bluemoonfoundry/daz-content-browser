@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from contextlib import asynccontextmanager
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -25,7 +25,12 @@ from demo_data import (
 )
 from utilities import open_daz_product
 from api_tasks import run_update_flow
-from managers.managers import chroma_db_manager, daz_pg_analyzer, sqlite_db, daz_script_server
+from managers.managers import (
+    get_chroma_db_manager,
+    get_daz_pg_analyzer,
+    get_sqlite_db,
+    get_daz_script_server,
+)
 
 import logging
 logger = logging.getLogger(__name__)
@@ -106,12 +111,6 @@ def _format_product(row: dict) -> dict:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if APP_MODE != "demo" and daz_pg_analyzer is None:
-        logger.warning(
-            "PostgreSQL credentials not configured — content-roots and asset-file endpoints "
-            "will be unavailable. Set DB_NAME, DB_USER, DB_PASS, DB_HOST, DB_PORT in your "
-            ".env file, or start the server with --demo, to enable them."
-        )
     if APP_MODE == "demo":
         logger.info("Server running in DEMO mode — PostgreSQL not required.")
     try:
@@ -204,7 +203,11 @@ def _prune_old_tasks(max_age: timedelta = timedelta(hours=1)) -> None:
 # ── Status & Update ────────────────────────────────────────────────────────────
 
 @app.get("/api/v1/status")
-def get_status():
+def get_status(
+    chroma_db_manager=Depends(get_chroma_db_manager),
+    sqlite_db=Depends(get_sqlite_db),
+    daz_pg_analyzer=Depends(get_daz_pg_analyzer)
+):
     """Index counts plus connection health. Polled frequently by the UI."""
     if APP_MODE == "demo":
         return get_demo_status_mock()
@@ -242,7 +245,13 @@ def get_update_status(task_id: str):
 
 
 @app.post("/api/v1/update", status_code=202)
-def start_update(body: UpdateRequest = UpdateRequest(), background_tasks: BackgroundTasks = None):
+def start_update(
+    body: UpdateRequest = UpdateRequest(),
+    background_tasks: BackgroundTasks = None,
+    sqlite_db=Depends(get_sqlite_db),
+    chroma_db_manager=Depends(get_chroma_db_manager),
+    daz_pg_analyzer=Depends(get_daz_pg_analyzer)
+):
     """Triggers an incremental (or forced full) re-index."""
     if APP_MODE == "demo":
         raise HTTPException(status_code=403, detail="Update functionality is disabled in demo mode.")
@@ -272,7 +281,10 @@ def start_update(body: UpdateRequest = UpdateRequest(), background_tasks: Backgr
 
     def wrapped_run():
         try:
-            run_update_flow(_current_task, force=body.force)
+            run_update_flow(_current_task, force=body.force,
+                          sqlite_db=sqlite_db,
+                          chroma_db_manager=chroma_db_manager,
+                          daz_pg_analyzer=daz_pg_analyzer)
         finally:
             _current_task.update({
                 "running": False,
@@ -309,6 +321,7 @@ def list_products(
     name_query: Optional[str] = None,
     sort_by: str = "name",
     sort_dir: str = "asc",
+    sqlite_db=Depends(get_sqlite_db)
 ):
     """Paginated product listing with optional filters and sort."""
     if APP_MODE == "demo":
@@ -361,7 +374,7 @@ def list_products(
 
 
 @app.get("/api/v1/products/{sku}")
-def get_product(sku: str):
+def get_product(sku: str, sqlite_db=Depends(get_sqlite_db)):
     """Full details for a single product."""
     if APP_MODE == "demo":
         product = get_demo_product_mock(sku)
@@ -382,7 +395,11 @@ def get_product_assets(sku: str):
 
 
 @app.post("/api/v1/products/{sku}/open", status_code=200)
-def open_product(sku: str):
+def open_product(
+    sku: str,
+    sqlite_db=Depends(get_sqlite_db),
+    daz_script_server=Depends(get_daz_script_server)
+):
     """Navigates the DAZ Studio Content Library to the product.
 
     Uses the DAZ Script Server plugin when available; falls back to subprocess launch.
@@ -409,7 +426,7 @@ def open_product(sku: str):
 # ── Filters ────────────────────────────────────────────────────────────────────
 
 @app.get("/api/v1/filters")
-def get_filters():
+def get_filters(sqlite_db=Depends(get_sqlite_db)):
     """All valid filter values (categories, artists, compatible figures)."""
     if APP_MODE == "demo":
         return get_demo_filters_mock()
@@ -419,7 +436,7 @@ def get_filters():
 # ── Search ─────────────────────────────────────────────────────────────────────
 
 @app.post("/api/v1/search")
-def run_search(request: UISearchRequest):
+def run_search(request: UISearchRequest, chroma_db_manager=Depends(get_chroma_db_manager)):
     """UI/vector semantic search. Accepts { query, filters, max_results, min_relevance }.
 
     Returns all matching results up to max_results in a single response. Pagination is
@@ -473,7 +490,7 @@ def run_search(request: UISearchRequest):
 
 
 @app.post("/api/v1/query")
-def run_query(request: QueryRequest):
+def run_query(request: QueryRequest, chroma_db_manager=Depends(get_chroma_db_manager)):
     """MCP-oriented semantic search (prompt-based, full filter set)."""
     logger.info(f"Query: {request}")
     result = (
@@ -535,7 +552,7 @@ def test_db_connection(payload: SettingsPayload):
 # ── DAZ Studio plugin status ────────────────────────────────────────────────────
 
 @app.get("/api/v1/daz-studio/status")
-def get_daz_studio_status():
+def get_daz_studio_status(daz_script_server=Depends(get_daz_script_server)):
     """Probes the DAZ Script Server plugin to check if it's running."""
     if APP_MODE == "demo":
         return {"plugin_detected": False, "plugin_url": None, "version": None}
@@ -543,7 +560,7 @@ def get_daz_studio_status():
 
 
 @app.get("/api/v1/daz-studio/content-dirs")
-def get_daz_content_dirs(refresh: bool = False):
+def get_daz_content_dirs(refresh: bool = False, daz_script_server=Depends(get_daz_script_server)):
     """Returns content library directories from the running DAZ Studio instance."""
     if APP_MODE == "demo":
         return {"dirs": [], "source": "demo"}
@@ -558,7 +575,7 @@ class LoadAssetRequest(BaseModel):
 
 
 @app.post("/api/v1/scene/load")
-def load_asset_into_scene(body: LoadAssetRequest):
+def load_asset_into_scene(body: LoadAssetRequest, daz_script_server=Depends(get_daz_script_server)):
     """Loads an asset file into the current DAZ Studio scene via the DAZ Script Server plugin."""
     if APP_MODE == "demo":
         return {"success": True, "message": "Demo mode — no action taken."}
@@ -574,7 +591,7 @@ def load_asset_into_scene(body: LoadAssetRequest):
 # ── Legacy / info ──────────────────────────────────────────────────────────────
 
 @app.get("/api/v1/content-roots")
-def get_content_roots():
+def get_content_roots(daz_pg_analyzer=Depends(get_daz_pg_analyzer)):
     if APP_MODE == "demo" or daz_pg_analyzer is None:
         return {"content_roots": []}
     roots = daz_pg_analyzer.get_content_roots()
@@ -582,7 +599,11 @@ def get_content_roots():
 
 
 @app.get("/api/v1/assets/{sku}")
-def get_assets(sku: str):
+def get_assets(
+    sku: str,
+    daz_pg_analyzer=Depends(get_daz_pg_analyzer),
+    daz_script_server=Depends(get_daz_script_server)
+):
     """Asset file paths for a SKU, with resolved absolute paths where available."""
     if APP_MODE == "demo" or daz_pg_analyzer is None:
         return {"sku": sku, "files": []}
@@ -614,7 +635,7 @@ def get_assets(sku: str):
 
 
 @app.get("/api/v1/browseproduct/{product_id}")
-def browse_product(product_id: str):
+def browse_product(product_id: str, sqlite_db=Depends(get_sqlite_db)):
     if APP_MODE == "demo":
         return {"status": "ok"}
     row = sqlite_db.get_sku_row(product_id)
@@ -626,7 +647,11 @@ def browse_product(product_id: str):
 
 
 @app.get("/api/v1/info")
-def get_info():
+def get_info(
+    chroma_db_manager=Depends(get_chroma_db_manager),
+    sqlite_db=Depends(get_sqlite_db),
+    daz_pg_analyzer=Depends(get_daz_pg_analyzer)
+):
     """Full stats including filter lists (for MCP/dashboard use)."""
     if APP_MODE == "demo":
         logger.info("Demo mode: returning mock database stats.")
