@@ -88,9 +88,10 @@ def find_plugin_dll(plat: str, override: str | None) -> Path:
         return p
 
     # Convention: plugin repo lives alongside this repo
-    plugin_repo = ROOT.parent.parent / "bmf-daz-content-browser-plugin"
+    plugin_repo = ROOT.parent / "bmf-daz-content-browser-plugin"
     if plat == "windows":
         candidates = [
+            plugin_repo / "build" / "plugin" / f"{PLUGIN_NAME}.dll",  # current CMake output dir
             plugin_repo / "build" / "plugin" / "Release" / f"{PLUGIN_NAME}.dll",
             plugin_repo / "build" / "Release" / f"{PLUGIN_NAME}.dll",
         ]

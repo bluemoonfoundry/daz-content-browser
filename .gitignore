@@ -90,10 +90,14 @@ settings.json
 # --- Local data directories (generated at runtime) ---
 chroma_db/
 models/
+morph_cache/
 # ui/dist/ is committed so developers can run without building the UI submodule
 
 # --- Local SQLite databases ---
 *.db
+# Exception: a small, checked-in fixture for cpp/tests' MorphIndexReader tests
+# (extracted from the real morph_index.db, not a runtime artifact).
+!cpp/tests/fixtures/morph_index.db
 
 # --- Build artifacts ---
 build/

@@ -68,6 +68,12 @@ vab load --force
 
 # Embed only — re-embeds products already in SQLite but missing from ChromaDB
 vab load --phase embed
+
+# Index morph library from DAZ content
+vab morphs index --library-path "C:/path/to/DAZ/library"
+
+# Re-index morphs from scratch
+vab morphs index --library-path "C:/path/to/DAZ/library" --force
 ```
 
 ## Architecture Overview
@@ -103,6 +109,23 @@ Fix: delete the `chroma_db/` directory and re-index. SQLite survives.
 rd /s /q chroma_db          # Windows
 rm -rf chroma_db            # Mac / Linux
 vab load --phase embed      # re-embed from SQLite (no web scraping needed)
+```
+
+**ChromaDB corruption recovery (morphs collection):** The same class of corruption
+(`Error loading hnsw index` / `Error creating hnsw segment reader`) can hit just the
+`morphs` collection if a `vab morphs index` run is killed mid-embed. Corruption is scoped
+to the collection being actively written — the sibling `daz_products2` collection in the
+same `chroma_db/` store is unaffected, so there's no need to wipe the whole store. Recover
+with a targeted collection reset instead:
+```python
+from src.managers.chroma_db_manager import ChromaDbManager
+ChromaDbManager(chroma_db_path, "morphs").reset_collection()
+```
+```bash
+vab morphs index --library-path "C:/path/to/DAZ/library"   # non --force: self-healing
+                                                              # embed logic re-embeds every
+                                                              # morph_index.db row missing
+                                                              # from the now-empty collection
 ```
 
 **Search:** The server returns up to `max_results` items in a single response.

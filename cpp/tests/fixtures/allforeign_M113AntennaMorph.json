@@ -1,0 +1,1106 @@
+[
+  {
+    "output": "Antenna%20Base:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#Antenna%20Base?center_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -7.860596
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "Antenna%20Base:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#Antenna%20Base?center_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -139.7893
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "Antenna%20Base:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#Antenna%20Base?end_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -8.167648
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "Antenna%20Base:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#Antenna%20Base?end_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -139.7893
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "01%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#01%20Antenna?center_point/x",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -0.02469635
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "01%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#01%20Antenna?center_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -8.167648
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "01%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#01%20Antenna?center_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -140.0053
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "01%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#01%20Antenna?end_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -7.943893
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "01%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#01%20Antenna?end_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -140.0046
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "02%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#02%20Antenna?center_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -7.943893
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "02%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#02%20Antenna?center_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -140.0046
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "02%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#02%20Antenna?end_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -7.832001
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "02%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#02%20Antenna?end_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -140.0039
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "03%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#03%20Antenna?center_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -7.832001
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "03%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#03%20Antenna?center_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -140.0039
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "03%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#03%20Antenna?end_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -7.943878
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "03%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#03%20Antenna?end_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -140.0032
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "04%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#04%20Antenna?center_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -7.943878
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "04%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#04%20Antenna?center_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -140.0032
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "04%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#04%20Antenna?end_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -7.832031
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "04%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#04%20Antenna?end_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -140.0023
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "05%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#05%20Antenna?center_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -7.832031
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "05%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#05%20Antenna?center_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -140.0023
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "05%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#05%20Antenna?end_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -7.832001
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "05%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#05%20Antenna?end_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -140.0014
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "06%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#06%20Antenna?center_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -7.832001
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "06%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#06%20Antenna?center_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -140.0014
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "06%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#06%20Antenna?end_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -7.943878
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "06%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#06%20Antenna?end_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -140.0006
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "07%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#07%20Antenna?center_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -7.943878
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "07%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#07%20Antenna?center_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -140.0006
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "07%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#07%20Antenna?end_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -7.720093
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "07%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#07%20Antenna?end_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -139.9998
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "08%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#08%20Antenna?center_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -7.720093
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "08%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#08%20Antenna?center_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -139.9998
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "08%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#08%20Antenna?end_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -8.055756
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "08%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#08%20Antenna?end_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -139.9977
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "09%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#09%20Antenna?center_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -8.055756
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "09%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#09%20Antenna?center_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -139.9977
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "09%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#09%20Antenna?end_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -8.055786
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "09%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#09%20Antenna?end_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -139.9981
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "10%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#10%20Antenna?center_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -8.055786
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "10%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#10%20Antenna?center_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -139.9981
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "10%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#10%20Antenna?end_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -7.943909
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "10%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#10%20Antenna?end_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -139.9972
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "11%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#11%20Antenna?center_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -7.943909
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "11%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#11%20Antenna?center_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -139.9972
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "11%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#11%20Antenna?end_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -7.943909
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "11%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#11%20Antenna?end_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -139.9964
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "12%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#12%20Antenna?center_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -7.943909
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "12%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#12%20Antenna?center_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -139.9964
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "12%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#12%20Antenna?end_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -8.055786
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "12%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#12%20Antenna?end_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -139.9956
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "13%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#13%20Antenna?center_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -8.055786
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "13%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#13%20Antenna?center_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -139.9956
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "13%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#13%20Antenna?end_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -8.055786
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "13%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#13%20Antenna?end_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -139.9947
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "14%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#14%20Antenna?center_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -8.055786
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "14%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#14%20Antenna?center_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -139.9947
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "14%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#14%20Antenna?end_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -8.055786
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "14%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#14%20Antenna?end_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -139.994
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "15%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#15%20Antenna?center_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -8.055786
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "15%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#15%20Antenna?center_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -139.994
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "15%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#15%20Antenna?end_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -7.943909
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "15%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#15%20Antenna?end_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -139.9933
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "16%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#16%20Antenna?center_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -7.943909
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "16%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#16%20Antenna?center_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -139.9933
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "16%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#16%20Antenna?end_point/y",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -8.167664
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "16%20Antenna:/data/3djoji/M113/M113%20Roof/M113%20RoofV4_74282.dsf#16%20Antenna?end_point/z",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20RoofV4_74282:#M113AntennaMorph-0xa44e442?value"
+      },
+      {
+        "op": "push",
+        "val": -139.9933
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  }
+]

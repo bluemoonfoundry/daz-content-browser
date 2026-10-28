@@ -3,13 +3,14 @@ import math
 import os
 import subprocess
 import sys
+import time
 import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import List, Optional
 
 from contextlib import asynccontextmanager
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -26,6 +27,15 @@ from demo_data import (
 from utilities import open_daz_product
 from api_tasks import run_update_flow
 from managers.managers import chroma_db_manager, daz_pg_analyzer, sqlite_db, daz_script_server
+from security import (
+    SESSION_COOKIE,
+    allowed_origins,
+    get_api_token,
+    host_origin_guard,
+    require_read_access,
+    require_token,
+    resolve_within_roots,
+)
 
 import logging
 logger = logging.getLogger(__name__)
@@ -80,6 +90,45 @@ def _save_settings(data: dict) -> None:
     _SETTINGS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
+def _public_settings() -> dict:
+    """Settings safe to return to clients — never includes the CMS password."""
+    s = _load_settings()
+    s["cms_password_set"] = bool(s.pop("cms_password", None))
+    return s
+
+
+# ── Content roots ──────────────────────────────────────────────────────────────
+
+_ROOTS_TTL_SECONDS = 60.0
+_roots_cache: tuple[float, list[str]] | None = None
+
+
+def _content_roots() -> list[str]:
+    """Registered content roots (DAZ CMS first, then the running DAZ Studio's library dirs).
+
+    Cached briefly: thumbnail requests arrive in bursts and each would otherwise hit PostgreSQL.
+    """
+    global _roots_cache
+    if APP_MODE == "demo":
+        return []
+    now = time.monotonic()
+    if _roots_cache and now - _roots_cache[0] < _ROOTS_TTL_SECONDS:
+        return _roots_cache[1]
+    pg_roots = daz_pg_analyzer.get_content_roots() if daz_pg_analyzer else []
+    plugin_roots = daz_script_server.get_content_directories() if daz_script_server.is_available() else []
+    # Deduplicate while preserving order: PostgreSQL roots first, then any new plugin roots
+    roots = list(dict.fromkeys(r for r in pg_roots + plugin_roots if r))
+    _roots_cache = (now, roots)
+    return roots
+
+
+def _require_in_roots(path: str) -> Path:
+    resolved = resolve_within_roots(path, _content_roots())
+    if resolved is None:
+        raise HTTPException(status_code=403, detail="Path is outside the registered content roots.")
+    return resolved
+
+
 # ── Format helpers ─────────────────────────────────────────────────────────────
 
 def _format_product(row: dict) -> dict:
@@ -114,6 +163,7 @@ async def lifespan(app: FastAPI):
         )
     if APP_MODE == "demo":
         logger.info("Server running in DEMO mode — PostgreSQL not required.")
+    get_api_token()  # generate/persist the per-install token at startup so clients can read it
     try:
         load_embedding_model()
     except RuntimeError as exc:
@@ -130,11 +180,39 @@ app = FastAPI(
 )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins(),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
 )
+# Added last so it runs first: reject foreign Host/Origin before anything else sees the request.
+app.middleware("http")(host_origin_guard)
+
+_auth = [Depends(require_token)]
+_read = [Depends(require_read_access)]
+
+
+# ── Auth ───────────────────────────────────────────────────────────────────────
+
+@app.post("/api/v1/auth/session")
+def create_session(request: Request, response: Response):
+    """Issues the HttpOnly session cookie the browser UI uses (fetches and <img> thumbnails).
+
+    Only browser pages from an allowed origin may call this: the Host/Origin guard has
+    already rejected foreign origins, and here the Origin header must be present so a
+    cross-site form or <img> without one can't plant the cookie. Non-browser clients use
+    `Authorization: Bearer <token>` from the token file instead.
+    """
+    if not request.headers.get("origin"):
+        raise HTTPException(status_code=403, detail="Session requires a browser Origin header.")
+    response.set_cookie(
+        SESSION_COOKIE,
+        get_api_token(),
+        httponly=True,
+        samesite="strict",
+        path="/api/",
+    )
+    return {"authenticated": True}
 
 
 # ── Request models ─────────────────────────────────────────────────────────────
@@ -203,7 +281,7 @@ def _prune_old_tasks(max_age: timedelta = timedelta(hours=1)) -> None:
 
 # ── Status & Update ────────────────────────────────────────────────────────────
 
-@app.get("/api/v1/status")
+@app.get("/api/v1/status", dependencies=_read)
 def get_status():
     """Index counts plus connection health. Polled frequently by the UI."""
     if APP_MODE == "demo":
@@ -226,13 +304,13 @@ def get_status():
     }
 
 
-@app.get("/api/v1/update/status")
+@app.get("/api/v1/update/status", dependencies=_read)
 def get_update_status_global():
     """Returns the status of the most recently triggered update."""
     return _current_task
 
 
-@app.get("/api/v1/update/status/{task_id}")
+@app.get("/api/v1/update/status/{task_id}", dependencies=_read)
 def get_update_status(task_id: str):
     """Returns status for a specific background task (legacy)."""
     task = update_tasks.get(task_id)
@@ -241,7 +319,7 @@ def get_update_status(task_id: str):
     return task
 
 
-@app.post("/api/v1/update", status_code=202)
+@app.post("/api/v1/update", status_code=202, dependencies=_auth)
 def start_update(body: UpdateRequest = UpdateRequest(), background_tasks: BackgroundTasks = None):
     """Triggers an incremental (or forced full) re-index."""
     if APP_MODE == "demo":
@@ -288,7 +366,7 @@ def start_update(body: UpdateRequest = UpdateRequest(), background_tasks: Backgr
     return {"message": "Update process started.", "task_id": task_id}
 
 
-@app.delete("/api/v1/update")
+@app.delete("/api/v1/update", dependencies=_auth)
 def cancel_update():
     """Signal a running index operation to stop at the next checkpoint."""
     if not _current_task.get("running"):
@@ -299,7 +377,7 @@ def cancel_update():
 
 # ── Browse products ────────────────────────────────────────────────────────────
 
-@app.get("/api/v1/products")
+@app.get("/api/v1/products", dependencies=_read)
 def list_products(
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=10000),
@@ -360,7 +438,7 @@ def list_products(
     return result
 
 
-@app.get("/api/v1/products/{sku}")
+@app.get("/api/v1/products/{sku}", dependencies=_read)
 def get_product(sku: str):
     """Full details for a single product."""
     if APP_MODE == "demo":
@@ -375,13 +453,13 @@ def get_product(sku: str):
     return _format_product(row)
 
 
-@app.get("/api/v1/products/{sku}/assets")
+@app.get("/api/v1/products/{sku}/assets", dependencies=_read)
 def get_product_assets(sku: str):
     """Asset files for a product."""
     return get_assets(sku)
 
 
-@app.post("/api/v1/products/{sku}/open", status_code=200)
+@app.post("/api/v1/products/{sku}/open", status_code=200, dependencies=_auth)
 def open_product(sku: str):
     """Navigates the DAZ Studio Content Library to the product.
 
@@ -408,7 +486,7 @@ def open_product(sku: str):
 
 # ── Filters ────────────────────────────────────────────────────────────────────
 
-@app.get("/api/v1/filters")
+@app.get("/api/v1/filters", dependencies=_read)
 def get_filters():
     """All valid filter values (categories, artists, compatible figures)."""
     if APP_MODE == "demo":
@@ -418,7 +496,7 @@ def get_filters():
 
 # ── Search ─────────────────────────────────────────────────────────────────────
 
-@app.post("/api/v1/search")
+@app.post("/api/v1/search", dependencies=_read)
 def run_search(request: UISearchRequest):
     """UI/vector semantic search. Accepts { query, filters, max_results, min_relevance }.
 
@@ -472,7 +550,7 @@ def run_search(request: UISearchRequest):
     return {"results": results, "total": len(results), "query": request.query, "took_ms": raw.get("took_ms", 0)}
 
 
-@app.post("/api/v1/query")
+@app.post("/api/v1/query", dependencies=_read)
 def run_query(request: QueryRequest):
     """MCP-oriented semantic search (prompt-based, full filter set)."""
     logger.info(f"Query: {request}")
@@ -486,15 +564,14 @@ def run_query(request: QueryRequest):
 
 # ── Settings ───────────────────────────────────────────────────────────────────
 
-@app.get("/api/v1/settings")
+@app.get("/api/v1/settings", dependencies=_auth)
 def get_settings():
-    """Returns the current application settings (env + settings.json overlay)."""
-    s = _load_settings()
-    s.pop("cms_password", None)
-    return s
+    """Returns the current application settings (env + settings.json overlay), minus the
+    CMS password — `cms_password_set` reports whether one is stored."""
+    return _public_settings()
 
 
-@app.put("/api/v1/settings")
+@app.put("/api/v1/settings", dependencies=_auth)
 def save_settings(payload: SettingsPayload):
     """Saves settings to settings.json, overlaying the env defaults."""
     existing = {}
@@ -504,12 +581,15 @@ def save_settings(payload: SettingsPayload):
         except Exception:
             pass
     updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    # The password is write-only, so the UI can't round-trip it; blank means "keep".
+    if updates.get("cms_password") == "":
+        del updates["cms_password"]
     existing.update(updates)
     _save_settings(existing)
-    return _load_settings()
+    return _public_settings()
 
 
-@app.post("/api/v1/settings/test-db")
+@app.post("/api/v1/settings/test-db", dependencies=_auth)
 def test_db_connection(payload: SettingsPayload):
     """Tests a PostgreSQL connection with the provided credentials."""
     try:
@@ -534,7 +614,7 @@ def test_db_connection(payload: SettingsPayload):
 
 # ── DAZ Studio plugin status ────────────────────────────────────────────────────
 
-@app.get("/api/v1/daz-studio/status")
+@app.get("/api/v1/daz-studio/status", dependencies=_read)
 def get_daz_studio_status():
     """Probes the DAZ Script Server plugin to check if it's running."""
     if APP_MODE == "demo":
@@ -542,7 +622,7 @@ def get_daz_studio_status():
     return daz_script_server.status()
 
 
-@app.get("/api/v1/daz-studio/content-dirs")
+@app.get("/api/v1/daz-studio/content-dirs", dependencies=_read)
 def get_daz_content_dirs(refresh: bool = False):
     """Returns content library directories from the running DAZ Studio instance."""
     if APP_MODE == "demo":
@@ -557,9 +637,13 @@ class LoadAssetRequest(BaseModel):
     path: str
 
 
-@app.post("/api/v1/scene/load")
+@app.post("/api/v1/scene/load", dependencies=_auth)
 def load_asset_into_scene(body: LoadAssetRequest):
-    """Loads an asset file into the current DAZ Studio scene via the DAZ Script Server plugin."""
+    """Loads an asset file into the current DAZ Studio scene via the DAZ Script Server plugin.
+
+    The path must resolve beneath a registered content root.
+    """
+    _require_in_roots(body.path)
     if APP_MODE == "demo":
         return {"success": True, "message": "Demo mode — no action taken."}
     if not daz_script_server.is_available():
@@ -573,7 +657,7 @@ def load_asset_into_scene(body: LoadAssetRequest):
 
 # ── Legacy / info ──────────────────────────────────────────────────────────────
 
-@app.get("/api/v1/content-roots")
+@app.get("/api/v1/content-roots", dependencies=_read)
 def get_content_roots():
     if APP_MODE == "demo" or daz_pg_analyzer is None:
         return {"content_roots": []}
@@ -581,7 +665,31 @@ def get_content_roots():
     return {"content_roots": roots}
 
 
-@app.get("/api/v1/assets/{sku}")
+@app.get("/api/v1/assets/thumbnail", dependencies=_auth)
+def get_asset_thumbnail(path: str):
+    """Serves the companion thumbnail PNG for a DAZ asset file.
+
+    DAZ Studio places thumbnails alongside content files with the same stem
+    and a .png extension (e.g. 'FN Ethan.duf' → 'FN Ethan.png').
+    Returns 404 when no thumbnail is found so the UI can show its placeholder.
+    Both the asset path and the served PNG must resolve beneath a registered content root.
+
+    Declared before /api/v1/assets/{sku}, which would otherwise match "thumbnail" as a SKU.
+    """
+    asset = _require_in_roots(path)
+    roots = _content_roots()
+    candidates = [
+        asset.with_suffix(".png"),
+        asset.parent / (asset.name + ".png"),
+    ]
+    for candidate in candidates:
+        # Re-check after resolution: the companion PNG could be a link pointing elsewhere.
+        if candidate.exists() and resolve_within_roots(str(candidate), roots):
+            return FileResponse(str(candidate), media_type="image/png")
+    raise HTTPException(status_code=404, detail="No thumbnail found for this asset.")
+
+
+@app.get("/api/v1/assets/{sku}", dependencies=_read)
 def get_assets(sku: str):
     """Asset file paths for a SKU, with resolved absolute paths where available."""
     if APP_MODE == "demo" or daz_pg_analyzer is None:
@@ -591,16 +699,7 @@ def get_assets(sku: str):
     if files is None:
         raise HTTPException(status_code=500, detail="Database error fetching asset files.")
 
-    pg_roots = daz_pg_analyzer.get_content_roots()
-    plugin_roots = daz_script_server.get_content_directories() if daz_script_server.is_available() else []
-    # Deduplicate while preserving order: PostgreSQL roots first, then any new plugin roots
-    seen: set[str] = set()
-    all_roots: list[str] = []
-    for r in pg_roots + plugin_roots:
-        if r and r not in seen:
-            seen.add(r)
-            all_roots.append(r)
-
+    all_roots = _content_roots()
     for f in files:
         relative = Path(f["path"].lstrip("/")) / f["filename"]
         f["resolved_path"] = None
@@ -613,7 +712,7 @@ def get_assets(sku: str):
     return {"sku": sku, "files": files}
 
 
-@app.get("/api/v1/browseproduct/{product_id}")
+@app.get("/api/v1/browseproduct/{product_id}", dependencies=_auth)
 def browse_product(product_id: str):
     if APP_MODE == "demo":
         return {"status": "ok"}
@@ -625,7 +724,7 @@ def browse_product(product_id: str):
     return {"success": True, "message": f"Opened '{product_name}' in Content Library."}
 
 
-@app.get("/api/v1/info")
+@app.get("/api/v1/info", dependencies=_read)
 def get_info():
     """Full stats including filter lists (for MCP/dashboard use)."""
     if APP_MODE == "demo":
@@ -663,40 +762,24 @@ def get_info():
 
 # ── Asset file helpers ─────────────────────────────────────────────────────────
 
-@app.get("/api/v1/assets/thumbnail")
-def get_asset_thumbnail(path: str):
-    """Serves the companion thumbnail PNG for a DAZ asset file.
-
-    DAZ Studio places thumbnails alongside content files with the same stem
-    and a .png extension (e.g. 'FN Ethan.duf' → 'FN Ethan.png').
-    Returns 404 when no thumbnail is found so the UI can show its placeholder.
-    """
-    asset = Path(path)
-    candidates = [
-        asset.with_suffix(".png"),
-        asset.parent / (asset.name + ".png"),
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return FileResponse(str(candidate), media_type="image/png")
-    raise HTTPException(status_code=404, detail="No thumbnail found for this asset.")
-
-
 class RevealRequest(BaseModel):
     path: str
 
 
-@app.post("/api/v1/files/reveal")
+@app.post("/api/v1/files/reveal", dependencies=_auth)
 def reveal_in_explorer(body: RevealRequest):
-    """Opens the system file explorer with the given file selected."""
-    target = Path(body.path)
+    """Opens the system file explorer with the given file selected.
+
+    The path must resolve beneath a registered content root.
+    """
+    target = _require_in_roots(body.path)
     if not target.exists():
-        raise HTTPException(status_code=404, detail=f"Path not found: {body.path}")
+        raise HTTPException(status_code=404, detail="Path not found.")
     try:
         if sys.platform == "win32":
-            # shell=True so Windows parses /select,<path> as a single argument;
-            # quoting the path handles spaces without confusing Explorer's parser.
-            subprocess.Popen(f'explorer /select,"{target}"', shell=True)
+            # A pre-quoted command string goes straight to CreateProcess (no cmd.exe), so
+            # Explorer sees /select,"<path>" intact and nothing in the path is shell-parsed.
+            subprocess.Popen(f'explorer /select,"{target}"')
         elif sys.platform == "darwin":
             subprocess.Popen(["open", "-R", str(target)])
         else:

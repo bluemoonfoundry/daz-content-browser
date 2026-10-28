@@ -1,0 +1,18 @@
+[
+  {
+    "output": "M113%20Main%20Body%20All_388415:#MorphLefttrack01-0xa45034f?value",
+    "operations": [
+      {
+        "op": "push",
+        "url": "M113%20Main%20Body%20All_388415:/data/3djoji/M113/M113%20Full%20Body/Morphs/3djoji/Base/Left%20Wheel%2001%20Pose.dsf#Left%20Wheel%2001%20Pose-0xa450275?value"
+      },
+      {
+        "op": "push",
+        "val": 1
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  }
+]

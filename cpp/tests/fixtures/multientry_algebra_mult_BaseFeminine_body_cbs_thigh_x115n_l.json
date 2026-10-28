@@ -1,0 +1,28 @@
+[
+  {
+    "output": "AJC%20Energy%20Sportswear%20Leggings_244823:#BaseFeminine_body_cbs_thigh_x115n_l?value",
+    "operations": [
+      {
+        "op": "push",
+        "url": "AJC%20Energy%20Sportswear%20Leggings_244823:/data/adeilsonjc/AJC%20Energy%20Sportswear%20Outfit/AJC%20Energy%20Sportswear%20Leggings/Morphs/adeilsonjc/Base/body_cbs_thigh_x115n_l.dsf#body_cbs_thigh_x115n_l?value"
+      },
+      {
+        "op": "push",
+        "val": 1
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  },
+  {
+    "output": "AJC%20Energy%20Sportswear%20Leggings_244823:#BaseFeminine_body_cbs_thigh_x115n_l?value",
+    "stage": "mult",
+    "operations": [
+      {
+        "op": "push",
+        "url": "AJC%20Energy%20Sportswear%20Leggings_244823:/data/adeilsonjc/AJC%20Energy%20Sportswear%20Outfit/AJC%20Energy%20Sportswear%20Leggings/Morphs/adeilsonjc/Base/BaseFeminine_body_bs_Body.dsf#BaseFeminine_body_bs_Body?value"
+      }
+    ]
+  }
+]

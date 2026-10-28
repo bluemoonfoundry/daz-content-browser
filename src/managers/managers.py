@@ -1,5 +1,6 @@
 import logging
 import os
+import psycopg2
 from .daz_db_analyzer import DazDBAnalyzer
 from .sqlite_db_manager import SQLiteWrapper
 from .chroma_db_manager import ChromaDbManager
@@ -22,7 +23,8 @@ chroma_db_manager = ChromaDbManager(
 
 try:
     daz_pg_analyzer = DazDBAnalyzer()
-except EnvironmentError as e:
+except (EnvironmentError, psycopg2.Error) as e:
+    # Missing config, or the DAZ CMS isn't running — the server still starts without it
     logger.warning(f"PostgreSQL analyzer not available: {e}")
     daz_pg_analyzer = None
 

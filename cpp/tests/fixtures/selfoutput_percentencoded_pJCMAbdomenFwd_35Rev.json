@@ -1,0 +1,18 @@
+[
+  {
+    "output": "AJC%20Aero%20Fitness%20Legging_246086:#pJCMAbdomenFwd_35%20Rev?value",
+    "operations": [
+      {
+        "op": "push",
+        "url": "AJC%20Aero%20Fitness%20Legging_246086:/data/adeilsonjc/AJC%20Aero%20Fitness%20Outfit/AJC%20Aero%20Fitness%20Legging/Morphs/adeilsonjc/Base/pJCMAbdomenFwd_35.dsf#pJCMAbdomenFwd_35?value"
+      },
+      {
+        "op": "push",
+        "val": -5
+      },
+      {
+        "op": "mult"
+      }
+    ]
+  }
+]

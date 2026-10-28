@@ -1,0 +1,36 @@
+{
+  "output": "Boots_30348:#body_cbs_foot_Back_l?value",
+  "operations": [
+    {
+      "op": "push",
+      "url": "Genesis9/l_foot:/data/Daz%203D/Genesis%209/Base/Genesis9.dsf#l_foot?rotation/x"
+    },
+    {
+      "op": "push",
+      "val": [
+        27.6,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "op": "push",
+      "val": [
+        65,
+        1,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "op": "push",
+      "val": 2
+    },
+    {
+      "op": "spline_tcb"
+    }
+  ]
+}

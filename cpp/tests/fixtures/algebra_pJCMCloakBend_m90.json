@@ -1,0 +1,16 @@
+{
+  "output": "GnHdCloak_G3_23369:#pJCMCloakBend_m90?value",
+  "operations": [
+    {
+      "op": "push",
+      "url": "Cloak:/data/%21Daz%20Original/G3HoodedCloak/Hooded%20Cloak/GnHdCloak_G3_23369.dsf#Cloak?rotation/x"
+    },
+    {
+      "op": "push",
+      "val": -0.01111111
+    },
+    {
+      "op": "mult"
+    }
+  ]
+}
