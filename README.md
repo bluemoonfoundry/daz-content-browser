@@ -139,8 +139,10 @@ python vab.py load --phase etl  # ETL only, skip embedding
 
 ```bash
 python vab.py server
-python vab.py server --host 0.0.0.0 --port 9000
+python vab.py server --port 9000
 ```
+
+The server binds to loopback (`127.0.0.1`) by default. Binding elsewhere (e.g. `--host 0.0.0.0`) prints a warning, and requests are still rejected unless their `Host` is listed in `VAB_ALLOWED_HOSTS` — see [Authentication & security](#authentication--security).
 
 ---
 
@@ -149,6 +151,40 @@ python vab.py server --host 0.0.0.0 --port 9000
 All endpoints are under `/api/v1/`. The server exposes interactive Swagger docs at `/docs` and ReDoc at `/redoc` — these are the authoritative reference for request/response schemas.
 
 Base URL (default): `http://localhost:8000`
+
+### Authentication & security
+
+The server is a single-user desktop backend. It defends against web pages in your browser reaching `http://127.0.0.1` (CSRF, DNS rebinding) and against accidental LAN exposure; other processes running as your user are trusted.
+
+**API token.** Endpoints marked **🔒 token** below require a per-install token. It is generated on first start and stored in `~/.daz3d/vab_api_token.txt` (next to the DAZ Script Server plugin's own token). Send it as a header:
+
+```bash
+curl -H "Authorization: Bearer $(cat ~/.daz3d/vab_api_token.txt)" http://127.0.0.1:8000/api/v1/settings
+```
+
+The bundled web UI doesn't read the file: it calls `POST /api/v1/auth/session` from its own origin and receives an `HttpOnly`, `SameSite=Strict` session cookie, which also authenticates `<img>` thumbnail requests. That endpoint refuses requests without a browser `Origin` header.
+
+**Read-only endpoints** (status, products, search, filters, info, DAZ Studio status) stay token-free by default so the DAZ Studio pane and MCP clients work without token plumbing. They are still covered by the Host/Origin checks. Set `VAB_REQUIRE_TOKEN_FOR_READS=1` to require the token on them too.
+
+**Host and Origin checks.** Requests whose `Host` isn't loopback get `403` (blocks DNS rebinding). `/api/` requests carrying an `Origin` header must come from an allowed UI origin or the server's own origin, and CORS is limited to the same list.
+
+**Content roots.** `scene/load`, `files/reveal` and `assets/thumbnail` only accept absolute paths that resolve — after `..` and symlinks — beneath a registered content root (DAZ CMS roots plus the running DAZ Studio's library directories). Anything else gets `403`. Demo mode registers no roots, so these endpoints always return `403` there.
+
+| Variable | Description |
+|---|---|
+| `VAB_API_TOKEN` | Use this fixed token instead of the generated one (tests, scripted clients) |
+| `VAB_API_TOKEN_FILE` | Token file location (default: `~/.daz3d/vab_api_token.txt`) |
+| `VAB_ALLOWED_HOSTS` | Comma-separated extra `Host` names to accept besides loopback |
+| `VAB_ALLOWED_ORIGINS` | Comma-separated UI origins for CORS (default: `http://localhost:5173,http://127.0.0.1:5173`, the Vite dev server) |
+| `VAB_REQUIRE_TOKEN_FOR_READS` | `1` to require the token on read-only endpoints too |
+
+#### `POST /api/v1/auth/session`
+
+Issues the UI's session cookie. Only accepted from an allowed browser origin.
+
+```json
+{ "authenticated": true }
+```
 
 ---
 
@@ -174,6 +210,8 @@ Health check and index counts. Polled frequently by the UI.
 
 #### `POST /api/v1/update`
 
+**🔒 token**
+
 Trigger an incremental re-index. Returns immediately; indexing runs in the background.
 
 ```json
@@ -185,6 +223,12 @@ Trigger an incremental re-index. Returns immediately; indexing runs in the backg
 ```
 
 Set `force: true` to rebuild the entire index from scratch.
+
+#### `DELETE /api/v1/update`
+
+**🔒 token**
+
+Signal a running index operation to stop at the next checkpoint.
 
 #### `GET /api/v1/update/status`
 
@@ -257,6 +301,8 @@ Full details for a single product by SKU.
 Asset file paths for a product, with resolved absolute paths where the files can be found on disk.
 
 #### `POST /api/v1/products/{sku}/open`
+
+**🔒 token**
 
 Navigate the DAZ Studio Content Library to this product. Uses the DAZ Script Server plugin if available, falls back to subprocess launch.
 
@@ -342,11 +388,15 @@ All distinct filter values present in the index. Use this to populate filter UI 
 
 #### `GET /api/v1/settings`
 
-Returns current configuration (environment + `settings.json` overlay). Password field is omitted.
+**🔒 token**
+
+Returns current configuration (environment + `settings.json` overlay). The CMS password is never returned; `cms_password_set` reports whether one is stored.
 
 #### `PUT /api/v1/settings`
 
-Saves settings to `settings.json`. Only fields included in the request body are updated; omitted fields are left unchanged.
+**🔒 token**
+
+Saves settings to `settings.json`. Only fields included in the request body are updated; omitted fields are left unchanged. `cms_password` is write-only: an empty string keeps the stored password. The response has the same shape as `GET`.
 
 ```json
 // Request body (all fields optional)
@@ -365,6 +415,8 @@ Saves settings to `settings.json`. Only fields included in the request body are 
 ```
 
 #### `POST /api/v1/settings/test-db`
+
+**🔒 token**
 
 Test a PostgreSQL connection with the given credentials. Accepts the same body as `PUT /api/v1/settings`.
 
@@ -401,7 +453,9 @@ Returns the content library directories from the running DAZ Studio instance.
 
 #### `POST /api/v1/scene/load`
 
-Load an asset file into the current DAZ Studio scene.
+**🔒 token**
+
+Load an asset file into the current DAZ Studio scene. `path` must resolve beneath a registered content root, otherwise `403`.
 
 ```json
 // Request body
@@ -436,13 +490,17 @@ Asset file records for a product with resolved absolute paths. Searches both Pos
 
 #### `GET /api/v1/assets/thumbnail?path={path}`
 
+**🔒 token**
+
 Serve the companion thumbnail image for a DAZ asset file. DAZ Studio places thumbnails alongside content files with the same filename and a `.png` extension.
 
-Returns the PNG directly, or `404` if no thumbnail exists.
+Returns the PNG directly, `404` if no thumbnail exists, or `403` if the asset (or its thumbnail) is outside the registered content roots.
 
 #### `POST /api/v1/files/reveal`
 
-Open the system file explorer with the given file selected (Windows Explorer, Finder, or `xdg-open`).
+**🔒 token**
+
+Open the system file explorer with the given file selected (Windows Explorer, Finder, or `xdg-open`). `path` must resolve beneath a registered content root, otherwise `403`.
 
 ```json
 // Request body

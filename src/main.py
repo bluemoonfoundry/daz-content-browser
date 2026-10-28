@@ -16,6 +16,7 @@ from rich.progress import (
 )
 
 from output_formatters import print_pretty, print_json, print_table
+from security import is_loopback_bind
 from utilities import open_daz_product
 import uvicorn
 
@@ -223,6 +224,11 @@ def server_command(args):
     if args.model:
         os.environ["EMBEDDING_MODEL_ID"] = args.model
         print(f"--- Embedding model: {args.model} ---")
+    if not is_loopback_bind(args.host):
+        print(
+            f"WARNING: binding to {args.host} exposes the API beyond this machine. Requests are "
+            "still rejected unless their Host is listed in VAB_ALLOWED_HOSTS."
+        )
     uvicorn.run("server:app", host=args.host, port=args.port, reload=args.demo)
 
 def main():
