@@ -4,18 +4,18 @@ import os
 import subprocess
 import sys
 import time
-import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from contextlib import asynccontextmanager
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+import embedding_utils
 from embedding_utils import load_embedding_model
 from demo_data import (
     get_demo_search_results as search_mock,
@@ -25,8 +25,10 @@ from demo_data import (
     get_demo_filters as get_demo_filters_mock,
 )
 from utilities import open_daz_product
-from api_tasks import run_update_flow
-from managers.managers import chroma_db_manager, daz_pg_analyzer, sqlite_db, daz_script_server
+from index_worker import spawn_worker, worker_log_path
+from managers.chroma_db_manager import VectorStoreUnavailable
+from managers.job_store import FAILED, QUEUED, RUNNING, JobConflict, public_view
+from managers.managers import chroma_db_manager, daz_pg_analyzer, sqlite_db, daz_script_server, job_store
 from security import (
     SESSION_COOKIE,
     allowed_origins,
@@ -48,15 +50,6 @@ _DIST_PATH = (
     if (Path(__file__).parent / "ui_dist").exists()
     else Path(__file__).parent.parent / "ui" / "dist"   # development
 )
-
-# ── Global update task (single active task; UI polls this) ────────────────────
-_current_task: dict = {
-    "running": False,
-    "progress": "",
-    "stage": "",
-    "error": None,
-    "last_run": None,
-}
 
 
 # ── Settings helpers ──────────────────────────────────────────────────────────
@@ -151,6 +144,55 @@ def _format_product(row: dict) -> dict:
     return result
 
 
+# ── Index jobs ─────────────────────────────────────────────────────────────────
+# Jobs live in the persisted job store and run in a separate worker process, so they
+# survive API restarts and only one can run across processes (see index_worker.py).
+
+_RESPAWN_SECONDS = 30.0
+_last_spawn: float = 0.0
+
+
+def _spawn_worker() -> None:
+    global _last_spawn
+    _last_spawn = time.monotonic()
+    spawn_worker(job_store)
+
+
+def _reconcile_jobs() -> None:
+    """Recovers jobs whose worker died and makes sure a queued job has a worker.
+
+    Called at startup and on status polls, so a crashed worker is noticed without
+    waiting for an API restart. Respawns are rate-limited: a worker that was just
+    spawned may simply not have claimed its job yet.
+    """
+    try:
+        recovered = job_store.recover_stale()
+        active = job_store.active()
+        if active and active["status"] == QUEUED and (
+            recovered or time.monotonic() - _last_spawn > _RESPAWN_SECONDS
+        ):
+            _spawn_worker()
+    except Exception:
+        logger.exception("Could not reconcile index jobs.")
+
+
+_TASK_CODES = {QUEUED: 1, RUNNING: 2, FAILED: -1}
+
+
+def _legacy_task_view(job: dict) -> dict:
+    """A job plus the fields the UI and older clients poll (running/progress/error/task_status)."""
+    view = public_view(job)
+    view.update({
+        "task_id": job["id"],
+        "task_status": _TASK_CODES.get(job["status"], 0),
+        "running": job["status"] in (QUEUED, RUNNING),
+        "last_run": view["created_at"],
+    })
+    if job["status"] != FAILED:
+        view["error"] = None
+    return view
+
+
 # ── Lifespan ───────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
@@ -170,6 +212,11 @@ async def lifespan(app: FastAPI):
         logger.warning(
             f"[embedding] Model not loaded — search and indexing will be unavailable: {exc}"
         )
+    if APP_MODE != "demo":
+        health = chroma_db_manager.health()
+        if not health["ok"]:
+            logger.error(f"Vector store unavailable — search is degraded. {health['repair']}")
+        _reconcile_jobs()
     yield
 
 
@@ -187,6 +234,11 @@ app.add_middleware(
 )
 # Added last so it runs first: reject foreign Host/Origin before anything else sees the request.
 app.middleware("http")(host_origin_guard)
+
+
+@app.exception_handler(VectorStoreUnavailable)
+def vector_store_unavailable(request: Request, exc: VectorStoreUnavailable):
+    return JSONResponse(status_code=503, content={"detail": str(exc), "repair": exc.repair})
 
 _auth = [Depends(require_token)]
 _read = [Depends(require_read_access)]
@@ -218,7 +270,10 @@ def create_session(request: Request, response: Response):
 # ── Request models ─────────────────────────────────────────────────────────────
 
 class UpdateRequest(BaseModel):
+    """`mode`: update (incremental), rebuild (wipe and re-index), or repair (reset the vector
+    store and re-embed from SQLite). `force: true` is the legacy spelling of rebuild."""
     force: bool = False
+    mode: Optional[Literal["update", "rebuild", "repair"]] = None
 
 
 class SearchFilters(BaseModel):
@@ -262,23 +317,6 @@ class SettingsPayload(BaseModel):
     daz_script_server_enabled: Optional[bool] = None
 
 
-# ── Utility ────────────────────────────────────────────────────────────────────
-
-update_tasks = {}
-
-
-def _prune_old_tasks(max_age: timedelta = timedelta(hours=1)) -> None:
-    cutoff = datetime.now(timezone.utc) - max_age
-    done_statuses = {0, -1}
-    stale = [
-        tid for tid, t in update_tasks.items()
-        if t.get("task_status") in done_statuses
-        and datetime.fromisoformat(t["created_at"]) < cutoff
-    ]
-    for tid in stale:
-        del update_tasks[tid]
-
-
 # ── Status & Update ────────────────────────────────────────────────────────────
 
 @app.get("/api/v1/status", dependencies=_read)
@@ -287,92 +325,121 @@ def get_status():
     if APP_MODE == "demo":
         return get_demo_status_mock()
 
-    chromadb_count = chroma_db_manager.collection.count()
+    vector_store = chroma_db_manager.health()
+    chromadb_count = vector_store.get("count", -1)
     sqlite_count = sqlite_db.count()
     postgres_count = daz_pg_analyzer.count_skus() if daz_pg_analyzer else -1
-    new_products = max(0, postgres_count - chromadb_count)
+    new_products = max(0, postgres_count - max(chromadb_count, 0))
     return {
-        "status": "ok",
+        "status": "ok" if vector_store["ok"] else "degraded",
         "postgres_connected": postgres_count >= 0,
         "sqlite_connected": sqlite_count >= 0,
-        "chromadb_connected": True,
+        "chromadb_connected": vector_store["ok"],
         "postgres_count": postgres_count,
         "sqlite_count": sqlite_count,
         "chromadb_count": chromadb_count,
         "new_products": new_products,
         "update_available": new_products > 0,
+        "repair": vector_store.get("repair"),
     }
+
+
+@app.get("/api/v1/health", dependencies=_read)
+def get_health():
+    """Per-component health with repair guidance. `status` is "ok" or "degraded"; the API
+    keeps serving what it can (browse, settings, jobs) while a component is down."""
+    if APP_MODE == "demo":
+        return {"status": "ok", "mode": "demo", "components": {}}
+
+    components = {
+        "vector_store": chroma_db_manager.health(),
+        "embedding_model": {"ok": embedding_utils._session is not None},
+        "sqlite": {"ok": sqlite_db.count() >= 0, "path": sqlite_db.sqlite_db_path},
+        "postgres": {"ok": daz_pg_analyzer is not None},
+    }
+    if not components["embedding_model"]["ok"]:
+        components["embedding_model"]["repair"] = (
+            "Search and indexing need the ONNX model; check the server log for the load error."
+        )
+    if not components["postgres"]["ok"]:
+        components["postgres"]["repair"] = (
+            "Configure the DAZ CMS connection in Settings (or .env) and restart; browse and "
+            "search still work from the local index."
+        )
+    if not components["sqlite"]["ok"]:
+        components["sqlite"]["repair"] = "Run `vab load` to build the local product cache."
+    try:
+        _reconcile_jobs()
+        latest = job_store.latest()
+        components["jobs"] = {
+            "ok": not (latest and latest["status"] == FAILED),
+            "latest": public_view(latest),
+            "worker_log": str(worker_log_path(job_store)),
+        }
+    except Exception as e:
+        components["jobs"] = {"ok": False, "error": str(e)}
+    # Postgres is optional for serving; everything else degrades a user-visible feature.
+    degraded = any(not c["ok"] for name, c in components.items() if name != "postgres")
+    return {"status": "degraded" if degraded else "ok", "mode": APP_MODE, "components": components}
 
 
 @app.get("/api/v1/update/status", dependencies=_read)
 def get_update_status_global():
-    """Returns the status of the most recently triggered update."""
-    return _current_task
+    """Status of the active index job, or else the most recent one. Polled by the UI."""
+    if APP_MODE != "demo":
+        _reconcile_jobs()
+    latest = job_store.latest()
+    if latest is None:
+        return {"running": False, "progress": "", "stage": "", "error": None, "last_run": None}
+    return _legacy_task_view(latest)
 
 
 @app.get("/api/v1/update/status/{task_id}", dependencies=_read)
 def get_update_status(task_id: str):
-    """Returns status for a specific background task (legacy)."""
-    task = update_tasks.get(task_id)
-    if not task:
+    """Status of a specific index job."""
+    job = job_store.get(task_id)
+    if not job:
         raise HTTPException(status_code=404, detail="Task not found")
-    return task
+    return _legacy_task_view(job)
+
+
+@app.get("/api/v1/jobs", dependencies=_read)
+def list_jobs(limit: int = Query(20, ge=1, le=200)):
+    """Recent index jobs, newest first, including failed and cancelled ones."""
+    return {"jobs": [public_view(j) for j in job_store.recent(limit)]}
 
 
 @app.post("/api/v1/update", status_code=202, dependencies=_auth)
-def start_update(body: UpdateRequest = UpdateRequest(), background_tasks: BackgroundTasks = None):
-    """Triggers an incremental (or forced full) re-index."""
+def start_update(body: UpdateRequest = UpdateRequest()):
+    """Queues an index job and starts a worker for it. One job runs at a time across the
+    API and the CLI; while one is active this returns its id instead of starting another."""
     if APP_MODE == "demo":
         raise HTTPException(status_code=403, detail="Update functionality is disabled in demo mode.")
 
-    if _current_task.get("running"):
-        return {"message": "Update already running.", "task_id": None}
-
-    _prune_old_tasks()
-    task_id = str(uuid.uuid4())
-    task_entry = {
-        "task_id": task_id,
-        "task_status": 1,
-        "stage": "start",
-        "progress": "Task has been queued.",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    update_tasks[task_id] = task_entry
-
-    _current_task.update({
-        "running": True,
-        "progress": "Starting…",
-        "stage": "start",
-        "error": None,
-        "cancel_requested": False,
-        "last_run": datetime.now(timezone.utc).isoformat(),
-    })
-
-    def wrapped_run():
-        try:
-            run_update_flow(_current_task, force=body.force)
-        finally:
-            _current_task.update({
-                "running": False,
-                "error": _current_task.get("progress", "") if _current_task.get("task_status") == -1 else None,
-            })
-            task_entry.update({
-                "task_status": _current_task.get("task_status", 0),
-                "stage": _current_task.get("stage", ""),
-                "progress": _current_task.get("progress", ""),
-            })
-
-    background_tasks.add_task(wrapped_run)
-    return {"message": "Update process started.", "task_id": task_id}
+    mode = body.mode or ("rebuild" if body.force else "update")
+    kind, params = ("repair", {}) if mode == "repair" else ("index", {"force": mode == "rebuild"})
+    try:
+        job = job_store.enqueue(kind, params, source="api")
+    except JobConflict as e:
+        return {"message": "Update already running.", "task_id": e.active["id"] if e.active else None}
+    try:
+        _spawn_worker()
+    except Exception as e:
+        # Never leave a queued job that nothing will run: it would block every later update.
+        logger.exception("Could not start the index worker.")
+        job_store.claim("api", job["id"])
+        job_store.finish(job["id"], "api", FAILED, f"Could not start the index worker: {e}", str(e))
+        raise HTTPException(status_code=500, detail=f"Could not start the index worker: {e}")
+    return {"message": "Update process started.", "task_id": job["id"], "mode": mode}
 
 
 @app.delete("/api/v1/update", dependencies=_auth)
 def cancel_update():
-    """Signal a running index operation to stop at the next checkpoint."""
-    if not _current_task.get("running"):
+    """Cancels the active index job: at once if still queued, else at the worker's next checkpoint."""
+    job = job_store.request_cancel()
+    if job is None:
         return {"message": "No update is running."}
-    _current_task["cancel_requested"] = True
-    return {"message": "Cancel requested."}
+    return {"message": "Cancel requested.", "task_id": job["id"], "status": job["status"]}
 
 
 # ── Browse products ────────────────────────────────────────────────────────────

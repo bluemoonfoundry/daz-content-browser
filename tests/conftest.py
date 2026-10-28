@@ -11,6 +11,7 @@ def demo_env(tmp_path_factory):
     os.environ.setdefault("SQLITE_TABLE_NAME", "products")
     os.environ.setdefault("CHROMA_PATH", str(tmp / "chroma"))
     os.environ.setdefault("CHROMA_COLLECTION", "test_collection")
+    os.environ.setdefault("JOBS_DB_PATH", str(tmp / "index_jobs.db"))
     # Blank (not unset) so load_dotenv() can't fill them in from .env: tests must never
     # reach a real DAZ CMS PostgreSQL, running or not
     for key in ("DB_NAME", "DB_HOST"):

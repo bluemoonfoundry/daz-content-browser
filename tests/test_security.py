@@ -82,7 +82,7 @@ def content_root(tmp_path):
 
 
 @pytest.fixture(params=["demo", "production"])
-def mode(request, server_module, content_root, monkeypatch):
+def mode(request, server_module, content_root, monkeypatch, tmp_path):
     """Runs a test in demo mode and in a production-like mode with fake managers."""
     root, _, _ = content_root
     monkeypatch.setattr(server_module, "_content_roots", lambda: [str(root)])
@@ -90,7 +90,9 @@ def mode(request, server_module, content_root, monkeypatch):
     if request.param == "production":
         monkeypatch.setattr(server_module, "APP_MODE", "production")
         monkeypatch.setattr(server_module, "daz_script_server", fake)
-        monkeypatch.setattr(server_module, "run_update_flow", lambda *a, **k: None)
+        from managers.job_store import JobStore
+        monkeypatch.setattr(server_module, "job_store", JobStore(str(tmp_path / "jobs.db")))
+        monkeypatch.setattr(server_module, "spawn_worker", lambda store: None)
         launched = []
         monkeypatch.setattr(server_module.subprocess, "Popen", lambda *a, **k: launched.append(a))
         monkeypatch.setattr(server_module, "open_daz_product", lambda **k: True)

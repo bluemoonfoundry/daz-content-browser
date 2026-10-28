@@ -20,7 +20,8 @@ from security import is_loopback_bind
 from utilities import open_daz_product
 import uvicorn
 
-from managers.managers import chroma_db_manager, sqlite_db
+from managers.job_store import SUCCEEDED, JobConflict, public_view
+from managers.managers import chroma_db_manager, job_store, sqlite_db
 
 
 def _ensure_utf8_console_output() -> None:
@@ -52,9 +53,13 @@ def _ensure_utf8_console_output() -> None:
             pass
 
 
-def load_command(args):
-    """Loads data from DAZ Postgres to SQLite and ChromaDB."""
-    from managers.postgres_db_manager import main as load_dazdb_content
+def _run_index_job(kind: str, params: dict) -> None:
+    """Runs an index job in this process through the shared job queue, with progress bars.
+
+    Exits non-zero if another job (from the API or another terminal) is active, or if
+    this one doesn't succeed.
+    """
+    from index_worker import run_inline
 
     _ensure_utf8_console_output()
 
@@ -86,7 +91,78 @@ def load_command(args):
                     description="Embedding ",
                 )
 
-        load_dazdb_content(args, on_progress=on_progress)
+        try:
+            job = run_inline(job_store, kind, params, source="cli", extra_progress=on_progress)
+        except JobConflict as e:
+            active = e.active or {}
+            print(
+                f"Error: index job {active.get('id')} is already {active.get('status')} "
+                f"(started from {active.get('source')}). Wait for it, or `vab jobs cancel`.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    if job is None:
+        print("A background worker picked up the job; follow it with `vab jobs show`.")
+        return
+    print(f"Job {job['id']}: {job['status']} — {job['progress']}")
+    if job["status"] != SUCCEEDED:
+        sys.exit(1)
+
+
+def load_command(args):
+    """Loads data from DAZ Postgres to SQLite and ChromaDB."""
+    _run_index_job("index", {"force": args.force, "all": args.all, "phase": args.phase, "limit": args.limit})
+
+
+def index_command(args):
+    """`vab index rebuild|repair` — the explicit recovery paths."""
+    if args.index_command == "rebuild":
+        _run_index_job("index", {"force": True})
+    elif args.index_command == "repair":
+        _run_index_job("repair", {})
+
+
+def worker_command(args):
+    """Runs queued index jobs (the API spawns `vab worker --drain` for each update)."""
+    from index_worker import worker_command as run_worker
+
+    run_worker(job_store, forever=not args.drain)
+
+
+def _print_job(job: dict) -> None:
+    print(json.dumps(public_view(job), indent=2))
+
+
+def jobs_command(args):
+    """Inspect and control index jobs: list, show, cancel, selftest."""
+    if args.jobs_command == "list":
+        for job in job_store.recent(args.limit):
+            view = public_view(job)
+            print(f"{view['id']}  {view['status']:<9}  {view['kind']:<8}  {view['source']:<4}  "
+                  f"attempt {view['attempt']}/{view['max_attempts']}  {view['created_at']}  {view['progress']}")
+    elif args.jobs_command == "show":
+        job = job_store.get(args.job_id) if args.job_id else job_store.latest()
+        if job is None:
+            print("No such job." if args.job_id else "No jobs yet.", file=sys.stderr)
+            sys.exit(1)
+        _print_job(job)
+    elif args.jobs_command == "cancel":
+        job = job_store.request_cancel(args.job_id)
+        if job is None:
+            print("No active job to cancel.", file=sys.stderr)
+            sys.exit(1)
+        _print_job(job)
+    elif args.jobs_command == "selftest":
+        params = {"steps": args.steps, "delay": args.delay, "fail": args.fail}
+        if args.background:
+            from index_worker import spawn_worker
+            job = job_store.enqueue("selftest", params, source="cli")
+            spawn_worker(job_store)
+            _print_job(job)
+        else:
+            _run_index_job("selftest", params)
+
 
 def morphs_index_command(args):
     """Indexes .dsf morph files from a DAZ library into morph_index.db, morph_cache/, and ChromaDB."""
@@ -261,6 +337,33 @@ def main():
         ),
 
     }
+
+    index_parser = subparsers.add_parser("index", help="Rebuild or repair the product index.")
+    index_subparsers = index_parser.add_subparsers(dest="index_command", required=True)
+    index_subparsers.add_parser("rebuild", help="Wipe SQLite and ChromaDB and re-index everything (same as load --force).")
+    index_subparsers.add_parser(
+        "repair", help="Reset the product vector store (quarantining it if it won't open) and re-embed from SQLite."
+    )
+    index_parser.set_defaults(func=index_command)
+
+    worker_parser = subparsers.add_parser("worker", help="Run queued index jobs.")
+    worker_parser.add_argument("--drain", action="store_true", help="Exit once the queue is empty instead of polling.")
+    worker_parser.set_defaults(func=worker_command)
+
+    jobs_parser = subparsers.add_parser("jobs", help="Inspect and control index jobs.")
+    jobs_subparsers = jobs_parser.add_subparsers(dest="jobs_command", required=True)
+    jobs_list = jobs_subparsers.add_parser("list", help="Recent jobs, newest first.")
+    jobs_list.add_argument("--limit", type=int, default=20)
+    jobs_show = jobs_subparsers.add_parser("show", help="One job (default: the active or latest).")
+    jobs_show.add_argument("job_id", nargs="?")
+    jobs_cancel = jobs_subparsers.add_parser("cancel", help="Cancel a job (default: the active one).")
+    jobs_cancel.add_argument("job_id", nargs="?")
+    jobs_selftest = jobs_subparsers.add_parser("selftest", help="Run a no-op job to check the worker.")
+    jobs_selftest.add_argument("--steps", type=int, default=3)
+    jobs_selftest.add_argument("--delay", type=float, default=0.2)
+    jobs_selftest.add_argument("--fail", action="store_true", help="Make the job fail, to check error reporting.")
+    jobs_selftest.add_argument("--background", action="store_true", help="Queue it for a spawned worker instead of running inline.")
+    jobs_parser.set_defaults(func=jobs_command)
 
     morphs_parser = subparsers.add_parser("morphs", help="Morph library ingest commands.")
     morphs_subparsers = morphs_parser.add_subparsers(dest="morphs_command", required=True)

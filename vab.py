@@ -11,6 +11,9 @@ commands:
   server       Run the FastAPI web server
   query        Query the ChromaDB vector store
   load         Load data from DAZ Postgres to SQLite and ChromaDB
+  index        Rebuild or repair the product index (index rebuild | index repair)
+  jobs         Inspect and control index jobs (list | show | cancel | selftest)
+  worker       Run queued index jobs
   stats        Display stats about the ChromaDB collection
   openproduct  Open a named DAZ product in DAZ Studio
 

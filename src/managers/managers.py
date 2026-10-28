@@ -4,6 +4,7 @@ import psycopg2
 from .daz_db_analyzer import DazDBAnalyzer
 from .sqlite_db_manager import SQLiteWrapper
 from .chroma_db_manager import ChromaDbManager
+from .job_store import JobStore
 from .daz_script_server import DazScriptServerClient
 
 from dotenv import load_dotenv
@@ -16,10 +17,13 @@ sqlite_db = SQLiteWrapper(
     sqlite_db_table = os.environ.get("SQLITE_TABLE_NAME")
 )
 
+# Opens lazily: a missing or corrupt store degrades search instead of blocking startup
 chroma_db_manager = ChromaDbManager(
     os.environ.get("CHROMA_PATH", "chroma_db"),
     os.environ.get("CHROMA_COLLECTION", "daz_products2")
 )
+
+job_store = JobStore(os.path.abspath(os.environ.get("JOBS_DB_PATH", "index_jobs.db")))
 
 try:
     daz_pg_analyzer = DazDBAnalyzer()

@@ -72,6 +72,13 @@ vab load --phase embed
 # Index morph library from DAZ content
 vab morphs index --library-path "C:/path/to/DAZ/library"
 
+# Repair a corrupt/unopenable product vector store (re-embeds from SQLite)
+vab index repair
+
+# Inspect / cancel index jobs (shared by the API and CLI)
+vab jobs list
+vab jobs cancel
+
 # Re-index morphs from scratch
 vab morphs index --library-path "C:/path/to/DAZ/library" --force
 ```
@@ -89,7 +96,15 @@ vab morphs index --library-path "C:/path/to/DAZ/library" --force
   writes to SQLite then calls `generate_embeddings()` in batches of `BATCH_SIZE` (default 1024),
   which internally sub-batches at `EMBEDDING_BATCH_SIZE` (default 32) for ONNX inference
 - `src/managers/sqlite_db_manager.py` — enrichment cache; survives ChromaDB resets
-- `src/managers/managers.py` — module-level singletons imported everywhere
+- `src/managers/managers.py` — module-level singletons imported everywhere; none of them
+  touch ChromaDB at import time (`ChromaDbManager` opens lazily), so a broken store never
+  blocks startup
+- `src/managers/job_store.py` — SQLite job table (`JOBS_DB_PATH`, default `index_jobs.db`);
+  a partial unique index allows one queued/running job across all processes; workers hold
+  a heartbeat lease, and lapsed leases are re-queued (resuming incrementally) or failed
+- `src/index_worker.py` — job handlers (`index`, `repair`, `selftest`) and the worker loop.
+  The API never indexes in-process: `POST /api/v1/update` queues a job and spawns a detached
+  `vab worker --drain`; `vab load` / `vab index` run their job inline through the same queue
 
 **Embedding stack:** `optimum[onnxruntime]` + `onnxruntime` (CPU); no CUDA required.
 CPU-only torch is a transitive dep of optimum — install with
@@ -102,9 +117,14 @@ Use `vab load --force` (or `POST /api/v1/update` with `{"force": true}`).
 SQLite is preserved; only embeddings are regenerated.
 
 **ChromaDB corruption recovery:** If the server crashes mid-write (force-kill, closed terminal),
-ChromaDB's Rust index can panic on next startup with:
+ChromaDB's Rust index can panic with:
 `range start index N out of range for slice of length M`
-Fix: delete the `chroma_db/` directory and re-index. SQLite survives.
+The API still starts; `/api/v1/status` and `/api/v1/health` report `degraded` with a repair
+hint. Fix: `vab index repair` (or `POST /api/v1/update` with `{"mode": "repair"}`), which
+resets the collection, or moves an unopenable store aside to `chroma_db.corrupt-<ts>`, and
+re-embeds from SQLite. Panics surface as pyo3 `PanicException`, a `BaseException`, so catch
+`BaseException` around Chroma calls (see `_is_fatal` in `chroma_db_manager.py`). Manual
+fallback:
 ```bash
 rd /s /q chroma_db          # Windows
 rm -rf chroma_db            # Mac / Linux

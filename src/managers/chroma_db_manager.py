@@ -2,10 +2,44 @@
 
 import chromadb
 import logging
+import os
+import time
 from typing import List, Optional
 from embedding_utils import generate_embeddings
 
 logger = logging.getLogger(__name__)
+
+
+class VectorStoreUnavailable(RuntimeError):
+    """The ChromaDB store could not be opened or queried (missing, locked, or corrupt).
+
+    Carries `repair`, a user-facing hint, so the API can answer 503 with something
+    actionable instead of crashing at import time.
+    """
+
+    def __init__(self, chroma_db_path: str, collection_name: str, cause: BaseException):
+        self.chroma_db_path = chroma_db_path
+        self.collection_name = collection_name
+        self.cause = f"{type(cause).__name__}: {cause}"
+        self.repair = repair_guidance(collection_name)
+        super().__init__(
+            f"Vector store {collection_name!r} at {chroma_db_path!r} is unavailable ({self.cause})."
+        )
+
+
+def repair_guidance(collection_name: str) -> str:
+    if collection_name == "morphs":
+        return ("Reset the 'morphs' collection, then re-run `vab morphs index --library-path <library>` "
+                "(non --force re-embeds everything missing).")
+    return ("Run `vab index repair` (or POST /api/v1/update with {\"mode\": \"repair\"}) to reset the "
+            f"{collection_name!r} collection and re-embed it from SQLite. If the store still cannot be "
+            "opened, stop the server and run the repair again so the directory can be quarantined.")
+
+
+def _is_fatal(exc: BaseException) -> bool:
+    # chromadb's Rust core surfaces panics as pyo3 PanicException, a BaseException subclass,
+    # so "catch Exception" misses exactly the corruption failures we care about.
+    return isinstance(exc, (KeyboardInterrupt, SystemExit, GeneratorExit))
 
 def build_where_clause(
     tags: Optional[List[str]] = None,
@@ -63,21 +97,86 @@ class ChromaDbManager:
     def __init__(self, chroma_db_path:str, collection_name:str):
         """Create a ChromaDB manager instance.
 
+        The store is opened lazily on first use, so a missing or corrupt store never
+        prevents importing (and therefore starting) the API.
+
         Args:
             chroma_db_path (str): Path to the ChromaDB database directory.
             collection_name (str): Name of the collection to use within ChromaDB.
         """
-        
+
         self.chroma_db_path = chroma_db_path
         self.collection_name = collection_name
-        self.client = chromadb.PersistentClient(path=chroma_db_path)
-        self.collection = self.client.get_or_create_collection(
-            name=self.collection_name,
-            metadata={"hnsw:space": "cosine"},  # Example for 768-dim embeddings
-        )
+        self._client = None
+        self._collection = None
+        self.last_error: Optional[str] = None
 
+    def _open(self) -> None:
+        try:
+            client = chromadb.PersistentClient(path=self.chroma_db_path)
+            collection = client.get_or_create_collection(
+                name=self.collection_name,
+                metadata={"hnsw:space": "cosine"},
+            )
+        except BaseException as e:
+            if _is_fatal(e):
+                raise
+            self._forget_cached_system()
+            err = VectorStoreUnavailable(self.chroma_db_path, self.collection_name, e)
+            self.last_error = err.cause
+            logger.error(str(err))
+            raise err from e
+        self._client, self._collection = client, collection
+        self.last_error = None
         logger.info(f"ChromaDB opened — path: {self.chroma_db_path!r}, collection: {self.collection_name!r}")
-        
+
+    def _forget_cached_system(self) -> None:
+        # chromadb caches one System per persist directory and registers it *before*
+        # starting it, so a failed open leaves a half-started System behind that every
+        # later open for this path reuses. Drop it so the next attempt (e.g. after a
+        # repair) starts clean.
+        try:
+            from chromadb.api.shared_system_client import SharedSystemClient
+            SharedSystemClient._identifier_to_system.pop(str(self.chroma_db_path), None)
+        except Exception:
+            logger.debug("Could not evict chromadb's cached System.", exc_info=True)
+
+    @property
+    def client(self):
+        if self._client is None:
+            self._open()
+        return self._client
+
+    @property
+    def collection(self):
+        if self._collection is None:
+            self._open()
+        return self._collection
+
+    def health(self) -> dict:
+        """Opens the store if needed and reports whether it is usable, with repair guidance if not.
+
+        A store can open cleanly yet fail at query time (a corrupt HNSW segment), so an
+        error recorded by a failed search keeps the store reported as degraded until a
+        later search, reconnect, or repair succeeds.
+        """
+        try:
+            count = self.collection.count()
+        except BaseException as e:
+            if _is_fatal(e):
+                raise
+            self.last_error = e.cause if isinstance(e, VectorStoreUnavailable) else f"{type(e).__name__}: {e}"
+        else:
+            if self.last_error is None:
+                return {"ok": True, "path": self.chroma_db_path, "collection": self.collection_name, "count": count}
+        return {
+            "ok": False,
+            "path": self.chroma_db_path,
+            "collection": self.collection_name,
+            "error": self.last_error,
+            "repair": repair_guidance(self.collection_name),
+        }
+
         
     def _clean_metadata(self, item: dict) -> dict:
         """ Cleans metadata dictionary by removing None values and non-serializable types.
@@ -100,12 +199,8 @@ class ChromaDbManager:
         Call this when an upsert fails with a stale-connection or missing-collection
         error so the next operation gets a fresh handle.
         """
-        self.client = chromadb.PersistentClient(path=self.chroma_db_path)
-        self.collection = self.client.get_or_create_collection(
-            name=self.collection_name,
-            metadata={"hnsw:space": "cosine"},
-        )
-        logger.info(f"ChromaDB reconnected — path: {self.chroma_db_path!r}, collection: {self.collection_name!r}")
+        self._client = self._collection = None
+        self._open()
 
     def get_all_ids(self) -> set:
         """Returns the set of all document IDs currently stored in the collection."""
@@ -121,11 +216,34 @@ class ChromaDbManager:
             self.client.delete_collection(name=self.collection_name)
         except Exception:
             logger.warning(f"Collection {self.collection_name!r} did not exist; nothing to delete.")
-        self.collection = self.client.get_or_create_collection(
+        self._collection = self.client.get_or_create_collection(
             name=self.collection_name,
             metadata={"hnsw:space": "cosine"},
         )
+        self.last_error = None
         logger.info(f"Collection {self.collection_name!r} reset and ready.")
+
+    def repair(self) -> str:
+        """Resets the collection; if the store itself won't open, quarantines the directory.
+
+        Returns a one-line description of what was done. The quarantined directory is
+        renamed, not deleted, so nothing is lost if the corruption diagnosis was wrong.
+        Quarantining takes every collection in the store with it (e.g. 'morphs'), which
+        then need re-indexing too.
+        """
+        try:
+            self.reset_collection()
+            return f"Reset collection {self.collection_name!r}."
+        except VectorStoreUnavailable as e:
+            if not os.path.exists(self.chroma_db_path):
+                raise
+            quarantine = f"{self.chroma_db_path}.corrupt-{time.strftime('%Y%m%d-%H%M%S')}"
+            logger.warning(f"Store will not open ({e.cause}); moving it to {quarantine!r}.")
+            self._client = self._collection = None
+            os.rename(self.chroma_db_path, quarantine)
+            self._open()
+            return (f"Store could not be opened; moved it to {quarantine!r} and created a fresh one. "
+                    "Other collections in it (e.g. morphs) must be re-indexed.")
 
     def search(
         self,
@@ -186,7 +304,7 @@ class ChromaDbManager:
 
         # --- 3. Query ChromaDB ---
 
-        results = self.collection.query (
+        results = self._query_with_reconnect(
             query_embeddings=[query_embedding.tolist()],
             n_results=query_limit,
             where=where_filter,
@@ -231,6 +349,35 @@ class ChromaDbManager:
             "results": paginated_results,
         }
         
+
+    def _query_with_reconnect(self, **kwargs):
+        """Queries, reconnecting once on failure.
+
+        The index worker is a separate process: when it resets or rebuilds the collection,
+        this process's handle points at a collection that no longer exists. A fresh handle
+        fixes that; if the retry fails too, the store is genuinely broken.
+        """
+        try:
+            results = self.collection.query(**kwargs)
+        except VectorStoreUnavailable:
+            raise
+        except BaseException as first:
+            if _is_fatal(first):
+                raise
+            logger.warning(f"ChromaDB query failed ({first}); reconnecting and retrying once.")
+            try:
+                self.reconnect()
+                results = self._collection.query(**kwargs)
+            except VectorStoreUnavailable:
+                raise
+            except BaseException as e:
+                if _is_fatal(e):
+                    raise
+                err = VectorStoreUnavailable(self.chroma_db_path, self.collection_name, e)
+                self.last_error = err.cause
+                raise err from e
+        self.last_error = None
+        return results
 
     def get_db_stats(self):
         """Returns the total document count from the ChromaDB collection.

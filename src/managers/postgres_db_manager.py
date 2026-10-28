@@ -374,7 +374,16 @@ def main(args, on_progress=None, cancel_check=None):
     if args.force:
         chroma_db_manager.reset_collection()
 
-    postgres_skus = daz_pg_analyzer.get_all_skus()
+    # Embed-only runs (e.g. `vab index repair`) work from SQLite and need no DAZ CMS.
+    if args.phase == 'embed':
+        postgres_skus = []
+    elif daz_pg_analyzer is None:
+        raise RuntimeError(
+            "DAZ CMS PostgreSQL is not available — check DB_NAME, DB_USER, DB_PASS, DB_HOST and "
+            "DB_PORT (or the CMS connection in Settings) and that DAZ Studio's CMS is running."
+        )
+    else:
+        postgres_skus = daz_pg_analyzer.get_all_skus()
 
     skus_to_process = []
     if args.all or args.force:

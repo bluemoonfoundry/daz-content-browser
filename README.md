@@ -204,49 +204,80 @@ Health check and index counts. Polled frequently by the UI.
   "sqlite_count": 4821,
   "chromadb_count": 4821,
   "new_products": 0,
-  "update_available": false
+  "update_available": false,
+  "repair": null
 }
 ```
+
+The API starts even when the vector store is missing or corrupt. In that case `status` is
+`"degraded"`, `chromadb_connected` is `false`, `repair` says how to fix it, and search
+endpoints answer `503` with the same `repair` hint. Browsing, settings and jobs keep working.
+
+#### `GET /api/v1/health`
+
+Per-component health (`vector_store`, `embedding_model`, `sqlite`, `postgres`, `jobs`). Each
+component reports `ok`, and a `repair` hint when it is not. Overall `status` is `"ok"` or
+`"degraded"`.
 
 #### `POST /api/v1/update`
 
 **🔒 token**
 
-Trigger an incremental re-index. Returns immediately; indexing runs in the background.
+Queue an index job. Returns immediately. The job runs in a separate worker process
+(`vab worker --drain`), so it survives API restarts.
 
 ```json
 // Request body
-{ "force": false }
+{ "mode": "update" }   // "update" (incremental), "rebuild" (wipe and re-index), "repair"
 
 // Response 202
-{ "message": "Update process started.", "task_id": "uuid" }
+{ "message": "Update process started.", "task_id": "uuid", "mode": "update" }
 ```
 
-Set `force: true` to rebuild the entire index from scratch.
+`repair` resets the vector store (moving it aside to `chroma_db.corrupt-<timestamp>` if it
+will not open) and re-embeds from SQLite without contacting the DAZ CMS. `force: true` is
+the legacy spelling of `rebuild`. Only one index job runs at a time across the API and the
+CLI. While one is active, this returns `"Update already running."` with that job's `task_id`.
 
 #### `DELETE /api/v1/update`
 
 **🔒 token**
 
-Signal a running index operation to stop at the next checkpoint.
+Cancel the active index job: immediately if it is still queued, otherwise at the worker's
+next checkpoint.
 
 #### `GET /api/v1/update/status`
 
-Status of the most recently triggered update. Poll this while an update is running.
+The active index job, or the most recent one if none is active. Poll this while an update is running.
 
 ```json
 {
+  "task_id": "uuid",
+  "kind": "index",
+  "status": "running",          // queued | running | succeeded | failed | cancelled
   "running": true,
-  "progress": "Embedding product 412 of 800…",
+  "progress": "Embedding: 412/800 (51%) — batch 1",
   "stage": "embed",
   "error": null,
+  "attempt": 1,
+  "max_attempts": 3,
+  "cancel_requested": false,
   "last_run": "2026-05-05T12:00:00+00:00"
 }
 ```
 
+If a worker dies (killed, crashed, machine slept), its lease lapses after
+`VAB_JOB_LEASE_SECONDS` (default 60). The job is then re-queued and resumed incrementally,
+up to `VAB_JOB_MAX_ATTEMPTS` (default 3), after which it fails with an `error`. The worker
+logs to `index_jobs.worker.log`, next to the job database (`JOBS_DB_PATH`, default `index_jobs.db`).
+
 #### `GET /api/v1/update/status/{task_id}`
 
-Status for a specific background task by ID (returned by `POST /api/v1/update`).
+Status for a specific index job by ID (returned by `POST /api/v1/update`).
+
+#### `GET /api/v1/jobs?limit=20`
+
+Recent index jobs, newest first, including failed and cancelled ones.
 
 ---
 
@@ -551,6 +582,26 @@ python vab.py server [--host HOST] [--port PORT] [--demo]
 ### `load`
 ```bash
 python vab.py load [--force] [--all] [--limit N] [--phase {etl,embed,all}]
+```
+
+### `index rebuild` / `index repair`
+
+```bash
+vab index rebuild   # same as load --force
+vab index repair    # reset the vector store and re-embed from SQLite (no DAZ CMS needed)
+```
+
+`load`, `index rebuild` and `index repair` run through the same job queue as the API. If
+another index job is already active, they exit with an error naming it.
+
+### `jobs` / `worker`
+
+```bash
+vab jobs list                 # recent index jobs
+vab jobs show [JOB_ID]        # one job as JSON (default: the active or latest)
+vab jobs cancel [JOB_ID]      # cancel the active job
+vab jobs selftest [--background] [--fail]   # no-op job to check the worker
+vab worker [--drain]          # run queued jobs; the API spawns `worker --drain` itself
 ```
 
 ### `query`
