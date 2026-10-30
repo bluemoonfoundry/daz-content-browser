@@ -7,6 +7,14 @@ from catalog.schema import connect
 from catalog.store import CatalogStore
 
 
+def _q(db, sql, *params):
+    conn = connect(db)
+    try:
+        return conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+
+
 def _asset(db, asset_id, h):
     conn = connect(db)
     conn.execute("INSERT OR IGNORE INTO assets (asset_id, sku, created_at) VALUES (?, NULL, 'x')",
@@ -111,11 +119,11 @@ def test_record_error_on_existing_vector_increments(gens, catalog):
     gens.record_current(g, [("daz:a", "v-a", "ha")])
     gens.record_error(g, ["daz:a"], "x")
     gens.record_error(g, ["daz:a"], "y")
-    row = dict(connect(catalog).execute("SELECT * FROM asset_vectors").fetchone())
+    row = dict(_q(catalog, "SELECT * FROM asset_vectors")[0])
     assert row["status"] == "error" and row["attempts"] == 2 and row["error"] == "y"
     assert row["vector_id"] == "v-a"
     gens.record_current(g, [("daz:a", "v-a", "ha")])
-    row = dict(connect(catalog).execute("SELECT * FROM asset_vectors").fetchone())
+    row = dict(_q(catalog, "SELECT * FROM asset_vectors")[0])
     assert row["status"] == "current" and row["attempts"] == 0 and row["error"] is None
 
 
@@ -144,4 +152,46 @@ def test_delete_cascades_vectors(gens, catalog):
     gens.record_current(g, [("daz:a", "v-a", "ha")])
     gens.delete(g)
     assert gens.get(g) is None
-    assert connect(catalog).execute("SELECT COUNT(*) FROM asset_vectors").fetchone()[0] == 0
+    assert _q(catalog, "SELECT COUNT(*) FROM asset_vectors")[0][0] == 0
+
+
+def test_exhausted_error_becomes_pending_when_content_changes(gens, catalog):
+    g = _build(gens)["id"]
+    gens.record_current(g, [("daz:a", "v-a", "ha"), ("daz:c", "v-c", "hc")])
+    for _ in range(3):
+        gens.record_error(g, ["daz:b"], "boom")
+    assert gens.pending(g) == []
+    _asset(catalog, "daz:b", "hb2")
+    assert gens.pending(g) == ["daz:b"]
+    assert gens.vector_totals(g)["error"] == 1
+
+
+def test_failure_after_content_change_restarts_retry_budget(gens, catalog):
+    g = _build(gens)["id"]
+    for _ in range(3):
+        gens.record_error(g, ["daz:b"], "boom")
+    _asset(catalog, "daz:b", "hb2")
+    gens.record_error(g, ["daz:b"], "boom2")
+    row = _q(catalog, "SELECT * FROM asset_vectors WHERE asset_id = 'daz:b'")[0]
+    assert row["attempts"] == 1 and row["doc_hash"] == "hb2"
+    assert "daz:b" in gens.pending(g)
+    gens.record_error(g, ["daz:b"], "boom3")
+    gens.record_error(g, ["daz:b"], "boom4")
+    assert "daz:b" not in gens.pending(g)
+
+
+def test_error_keeps_real_vector_id(gens, catalog):
+    g = _build(gens)["id"]
+    gens.record_current(g, [("daz:a", "v-a", "ha")])
+    _asset(catalog, "daz:a", "ha2")
+    gens.record_error(g, ["daz:a"], "x")
+    row = _q(catalog, "SELECT * FROM asset_vectors")[0]
+    assert row["vector_id"] == "v-a" and row["attempts"] == 1 and row["doc_hash"] == "ha2"
+    assert gens.vector_ids_for(g, {"daz:a"}) == ["v-a"]
+
+
+def test_placeholder_ids_never_returned(gens, catalog):
+    g = _build(gens)["id"]
+    gens.record_error(g, ["daz:b", "daz:gone"], "x")
+    assert gens.vector_ids_for(g, {"daz:b", "daz:gone"}) == []
+    assert gens.orphans(g) == []

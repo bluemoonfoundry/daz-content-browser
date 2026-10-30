@@ -130,6 +130,8 @@ class GenerationStore:
     # --- vector state --------------------------------------------------------------
 
     def record_current(self, gen_id: int, items: Iterable[tuple]) -> None:
+        # Replaces vector_id: callers that change an asset's vector id must delete the old
+        # Chroma id themselves.
         now = _now()
         rows = [(gen_id, a, v, h, now) for a, v, h in items]
         if not rows:
@@ -146,13 +148,18 @@ class GenerationStore:
         if not asset_ids:
             return
         # An asset with no vector row yet gets a placeholder vector_id (NOT NULL column).
-        rows = [(gen_id, a, f"error:{a}", error) for a in asset_ids]
+        # For error rows ``doc_hash`` is the content hash last attempted; a failure on new
+        # content restarts the retry budget (attempts = 1).
+        rows = [(gen_id, a, f"error:{a}", a, error) for a in asset_ids]
         with self._write() as conn:
             conn.executemany(
                 "INSERT INTO asset_vectors (generation_id, asset_id, vector_id, doc_hash, status, "
-                "error, attempts) VALUES (?, ?, ?, NULL, 'error', ?, 1) "
-                "ON CONFLICT (generation_id, asset_id) DO UPDATE SET status = 'error', "
-                "error = excluded.error, attempts = attempts + 1", rows)
+                "error, attempts) VALUES (?, ?, ?, (SELECT doc_hash FROM asset_view WHERE asset_id = ?), "
+                "'error', ?, 1) "
+                "ON CONFLICT (generation_id, asset_id) DO UPDATE SET "
+                "attempts = CASE WHEN status = 'error' AND doc_hash IS excluded.doc_hash "
+                "THEN attempts + 1 ELSE 1 END, "
+                "status = 'error', error = excluded.error, doc_hash = excluded.doc_hash", rows)
 
     def drop_vectors(self, gen_id: int, asset_ids: list) -> None:
         with self._write() as conn:
@@ -166,7 +173,7 @@ class GenerationStore:
                "LEFT JOIN asset_vectors av ON av.generation_id = ? AND av.asset_id = v.asset_id "
                "WHERE av.asset_id IS NULL "
                "OR (av.status = 'current' AND av.doc_hash IS NOT v.doc_hash) "
-               "OR (av.status = 'error' AND av.attempts < ?) "
+               "OR (av.status = 'error' AND (av.attempts < ? OR av.doc_hash IS NOT v.doc_hash)) "
                "ORDER BY v.asset_id")
         params: list = [gen_id, max_attempts]
         if limit is not None:
@@ -180,7 +187,8 @@ class GenerationStore:
             rows = conn.execute(
                 "SELECT av.vector_id FROM asset_vectors av "
                 "LEFT JOIN asset_view v ON v.asset_id = av.asset_id "
-                "WHERE av.generation_id = ? AND v.asset_id IS NULL ORDER BY av.vector_id",
+                "WHERE av.generation_id = ? AND v.asset_id IS NULL AND av.vector_id NOT LIKE 'error:%' "
+                "ORDER BY av.vector_id",
                 (gen_id,)).fetchall()
         return [r[0] for r in rows]
 
@@ -210,7 +218,8 @@ class GenerationStore:
             for chunk in _chunks(sorted(asset_ids)):
                 out += [r[0] for r in conn.execute(
                     f"SELECT vector_id FROM asset_vectors WHERE generation_id = ? AND asset_id IN "
-                    f"({_marks(chunk)}) ORDER BY vector_id", (gen_id, *chunk))]
+                    f"({_marks(chunk)}) AND vector_id NOT LIKE 'error:%' ORDER BY vector_id",
+                    (gen_id, *chunk))]
         return out
 
     def assets_for_vectors(self, gen_id: int, vector_ids: list) -> dict:
