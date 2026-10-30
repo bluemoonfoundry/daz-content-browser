@@ -24,11 +24,11 @@ def migration_hint(error: str) -> str:
     return f"{error}; restart to retry; see server log"
 
 
-def pending_cms_diff(cms_skus, cms_index: dict) -> dict:
+def pending_cms_diff(cms_skus, present_keys: set) -> dict:
     """Pending DAZ CMS changes from a key-set diff: SKUs the CMS has that the catalog's
     present ``daz_cms`` records lack (new), and the reverse (removed)."""
     cms = {str(s) for s in cms_skus if s}
-    present = {k for k, rec in cms_index.items() if rec["present"]}
+    present = {str(k) for k in present_keys}
     return {"new": len(cms - present), "removed": len(present - cms)}
 
 
@@ -79,7 +79,7 @@ def index_status(catalog: CatalogStore, gens: GenerationStore, configured_model:
                 "id", "model_id", "model_dim", "doc_format_version", "promoted_at")}
         if building is not None:
             out["building_generation"] = {"id": building["id"], "model_id": building["model_id"],
-                                          "pending": len(gens.pending(building["id"]))}
+                                          "pending": gens.pending_count(building["id"])}
             out["rebuild_interrupted"] = not job_active
             if not job_active:
                 out["resume_hint"] = _resume_hint(building)

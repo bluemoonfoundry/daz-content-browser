@@ -150,12 +150,28 @@ def _catalog_reads():
                       f"Retry shortly; if it persists, check the server log."})
 
 
+_CMS_TTL_SECONDS = 30.0
+_cms_cache: tuple | None = None  # (monotonic time, (postgres_count, pending_cms))
+
+
 def _cms_snapshot() -> tuple:
     """``(postgres_count, pending_cms)`` from the DAZ CMS; ``(-1, None)`` when unreachable.
 
     ``pending_cms`` is a key-set diff of CMS SKUs against the catalog's present CMS records
-    (``{"new", "removed"}``), or None when either side can't be read.
+    (``{"new", "removed"}``), or None when either side can't be read. Cached briefly: the UI
+    polls /status, and each snapshot reads every SKU from PostgreSQL. A stale value only
+    delays the "update available" hint by one TTL.
     """
+    global _cms_cache
+    now = time.monotonic()
+    if _cms_cache and now - _cms_cache[0] < _CMS_TTL_SECONDS:
+        return _cms_cache[1]
+    snapshot = _read_cms_snapshot()
+    _cms_cache = (now, snapshot)
+    return snapshot
+
+
+def _read_cms_snapshot() -> tuple:
     if daz_pg_analyzer is None:
         return -1, None
     try:
@@ -171,7 +187,7 @@ def _cms_snapshot() -> tuple:
         skus = daz_pg_analyzer.get_all_skus()
         if count > 0 and not skus:  # get_all_skus() answers [] on a query error
             return count, None
-        return count, pending_cms_diff(skus, catalog.source_index(CMS_SOURCE))
+        return count, pending_cms_diff(skus, catalog.present_keys(CMS_SOURCE))
     except Exception:
         logger.warning("Could not diff DAZ CMS SKUs against the catalog.", exc_info=True)
         return count, None
@@ -477,9 +493,13 @@ def get_health():
 
     vector_store = snap["vector_store"]
     if vector_store is None:
-        vector_store = {"ok": False, "error": "No active index generation.",
-                        "repair": migration_hint(migration_error) if migration_error
-                        else rebuild_hint(configured)}
+        if migration_error or idx["error"]:
+            # The catalog can't be read, so whether an index exists is unknown.
+            vector_store = {"ok": False, "error": "Index state unknown: the catalog is unavailable.",
+                            "repair": snap["repair"]}
+        else:
+            vector_store = {"ok": False, "error": "No active index generation.",
+                            "repair": rebuild_hint(configured)}
     query_model = active["model_id"] if active else configured
     flagged = idx["rebuild_required"] or idx["rebuild_interrupted"] or idx["error"]
     components = {
@@ -503,6 +523,8 @@ def get_health():
         )
     if migration_error:
         components["catalog"]["repair"] = migration_hint(migration_error)
+    elif idx["error"]:
+        components["catalog"].update(ok=False, error=idx["error"], repair=snap["repair"])
     if not components["postgres"]["ok"]:
         components["postgres"]["repair"] = (
             "Configure the DAZ CMS connection in Settings (or .env) and restart; browse and "
@@ -969,6 +991,9 @@ def get_info():
 
     with _catalog_reads():
         snap = _index_snapshot()
+        if snap["index"]["error"]:
+            raise HTTPException(status_code=503, detail={
+                "reason": "catalog_unavailable", "repair": snap["repair"]})
         total_docs = max(_vector_count(snap["index"]), 0)
         if total_docs == 0:
             raise HTTPException(status_code=404, detail="Database collection not found or empty.")

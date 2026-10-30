@@ -114,7 +114,7 @@ class DazDBAnalyzer:
         Returns:
             list: A list of all SKUs in the database as strings.
         """
-        logger.info("Fetching all valid SKUs from PostgreSQL...")
+        logger.debug("Fetching all valid SKUs from PostgreSQL...")
         sql = "SELECT token FROM dzcontent.product WHERE token IS NOT NULL AND token != ''"
         results = self._execute_query(sql)
         return [row['token'] for row in results] if results else []

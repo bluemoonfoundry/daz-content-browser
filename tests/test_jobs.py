@@ -325,6 +325,9 @@ def prod(monkeypatch, tmp_path, broken_chroma, fake_embedder):
     monkeypatch.setattr(server, "job_store", JobStore(str(tmp_path / "api_jobs.db")))
     monkeypatch.setattr(server, "spawn_worker", lambda store: spawned.append(store))
     monkeypatch.setattr(server, "load_embedding_model", lambda: None)
+    # Never reach a real DAZ CMS that .env may configure.
+    monkeypatch.setattr(server, "daz_pg_analyzer", None)
+    monkeypatch.setattr(server, "_cms_cache", None)
     server.spawned = spawned
     return server
 

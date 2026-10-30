@@ -191,6 +191,12 @@ class CatalogStore:
                         "SELECT source_key, asset_id, present, source_modified, payload_hash,"
                         " fetched_at FROM source_records WHERE source = ?", (source,))}
 
+    def present_keys(self, source: str) -> set:
+        """Keys of the records ``source`` currently lists (``present = 1``)."""
+        with self._conn() as conn:
+            return {r[0] for r in conn.execute(
+                "SELECT source_key FROM source_records WHERE source = ? AND present = 1", (source,))}
+
     # --- filters ---------------------------------------------------------------------
 
     @staticmethod

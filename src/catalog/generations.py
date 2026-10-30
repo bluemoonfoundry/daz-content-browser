@@ -188,13 +188,22 @@ class GenerationStore:
                     f"DELETE FROM asset_vectors WHERE generation_id = ? AND asset_id IN "
                     f"({_marks(chunk)})", (gen_id, *chunk))
 
+    # Assets of a generation still needing an embedding: missing, stale, or failed with
+    # retry budget left (or failed on content that has since changed).
+    _PENDING_FROM = (
+        "FROM asset_view v "
+        "LEFT JOIN asset_vectors av ON av.generation_id = ? AND av.asset_id = v.asset_id "
+        "WHERE av.asset_id IS NULL "
+        "OR (av.status = 'current' AND av.doc_hash IS NOT v.doc_hash) "
+        "OR (av.status = 'error' AND (av.attempts < ? OR av.doc_hash IS NOT v.doc_hash))")
+
+    def pending_count(self, gen_id: int, max_attempts: int = 3) -> int:
+        with self._conn() as conn:
+            return conn.execute("SELECT COUNT(*) " + self._PENDING_FROM,
+                                (gen_id, max_attempts)).fetchone()[0]
+
     def pending(self, gen_id: int, max_attempts: int = 3, limit: Optional[int] = None) -> list:
-        sql = ("SELECT v.asset_id FROM asset_view v "
-               "LEFT JOIN asset_vectors av ON av.generation_id = ? AND av.asset_id = v.asset_id "
-               "WHERE av.asset_id IS NULL "
-               "OR (av.status = 'current' AND av.doc_hash IS NOT v.doc_hash) "
-               "OR (av.status = 'error' AND (av.attempts < ? OR av.doc_hash IS NOT v.doc_hash)) "
-               "ORDER BY v.asset_id")
+        sql = "SELECT v.asset_id " + self._PENDING_FROM + " ORDER BY v.asset_id"
         params: list = [gen_id, max_attempts]
         if limit is not None:
             sql += " LIMIT ?"

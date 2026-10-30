@@ -282,44 +282,60 @@ class ChromaDbManager:
             return (f"Store could not be opened; moved it to {quarantine!r} and created a fresh one. "
                     "Other collections in it (e.g. morphs) must be re-indexed.")
 
-    def search(self, query_embedding, n_results: int, ids: Optional[List[str]] = None) -> list:
-        """Nearest vectors to ``query_embedding``: ``[{"id", "distance"}]``, closest first.
+    def search(self, query_embedding, n_results: int, ids: Optional[List[str]] = None) -> tuple:
+        """Nearest vectors to ``query_embedding``: ``(hits, missing_ids)``.
 
-        ``ids`` restricts the query to those vector ids (exact filtering is resolved by the
-        caller from the catalog); an empty list matches nothing. Ids the collection does not
-        hold are dropped instead of failing the query.
+        ``hits`` is ``[{"id", "distance"}]``, closest first. ``ids`` restricts the query to
+        those vector ids (exact filtering is resolved by the caller from the catalog); an
+        empty list matches nothing. Chroma fails a whole query when any requested id is
+        unknown, so unknown ids are stripped and returned as ``missing_ids`` for the caller
+        to reconcile; that is a data mismatch, not a store failure, so it neither reconnects
+        nor marks the store degraded.
         """
+        missing: list = []
         if ids is not None:
             ids = list(dict.fromkeys(ids))
             if not ids:
-                return []
-            n_results = min(n_results, len(ids))
-        if n_results <= 0:
-            return []
+                return [], missing
         embedding = query_embedding.tolist() if hasattr(query_embedding, "tolist") else list(query_embedding)
-        kwargs = dict(query_embeddings=[embedding], n_results=n_results, include=["distances"])
+
+        def kwargs(id_list):
+            n = min(n_results, len(id_list)) if id_list is not None else n_results
+            return dict(query_embeddings=[embedding], n_results=n, ids=id_list, include=["distances"])
+
+        if n_results <= 0:
+            return [], missing
         try:
-            results = self._query_with_reconnect(ids=ids, **kwargs)
-        except VectorStoreUnavailable as e:
-            # Chroma fails the whole query when any requested id is unknown.
-            if ids is None or "finding id" not in e.cause:
+            results = self.collection.query(**kwargs(ids))
+            self.last_error = None
+        except VectorStoreUnavailable:
+            raise
+        except BaseException as first:
+            if _is_fatal(first):
                 raise
-            try:
-                known = set(self.collection.get(ids=ids, include=[])["ids"])
-            except BaseException as lookup:
-                if _is_fatal(lookup):
-                    raise
-                raise e from lookup
-            ids = [i for i in ids if i in known]
-            if not ids:
-                self.last_error = None
-                return []
-            kwargs["n_results"] = min(kwargs["n_results"], len(ids))
-            results = self._query_with_reconnect(ids=ids, **kwargs)
+            known = self._known_ids(ids) if ids is not None and "finding id" in str(first) else None
+            if known is None:
+                results = self._retry_after_reconnect(first, **kwargs(ids))
+            else:
+                missing = [i for i in ids if i not in known]
+                ids = [i for i in ids if i in known]
+                if not ids:
+                    return [], missing
+                results = self._query_with_reconnect(**kwargs(ids))
         if not results["ids"]:
-            return []
-        return [{"id": vid, "distance": dist}
+            return [], missing
+        hits = [{"id": vid, "distance": dist}
                 for vid, dist in zip(results["ids"][0], results["distances"][0])]
+        return hits, missing
+
+    def _known_ids(self, ids: List[str]) -> Optional[set]:
+        """Which of ``ids`` the collection holds, or None if that can't be checked."""
+        try:
+            return set(self.collection.get(ids=ids, include=[])["ids"])
+        except BaseException as e:
+            if _is_fatal(e):
+                raise
+            return None
 
     def _query_with_reconnect(self, **kwargs):
         """Queries, reconnecting once on failure.
@@ -335,18 +351,23 @@ class ChromaDbManager:
         except BaseException as first:
             if _is_fatal(first):
                 raise
-            logger.warning(f"ChromaDB query failed ({first}); reconnecting and retrying once.")
-            try:
-                self.reconnect()
-                results = self._collection.query(**kwargs)
-            except VectorStoreUnavailable:
+            return self._retry_after_reconnect(first, **kwargs)
+        self.last_error = None
+        return results
+
+    def _retry_after_reconnect(self, first: BaseException, **kwargs):
+        logger.warning(f"ChromaDB query failed ({first}); reconnecting and retrying once.")
+        try:
+            self.reconnect()
+            results = self._collection.query(**kwargs)
+        except VectorStoreUnavailable:
+            raise
+        except BaseException as e:
+            if _is_fatal(e):
                 raise
-            except BaseException as e:
-                if _is_fatal(e):
-                    raise
-                err = VectorStoreUnavailable(self.chroma_db_path, self.collection_name, e)
-                self.last_error = err.cause
-                raise err from e
+            err = VectorStoreUnavailable(self.chroma_db_path, self.collection_name, e)
+            self.last_error = err.cause
+            raise err from e
         self.last_error = None
         return results
 

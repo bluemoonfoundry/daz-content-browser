@@ -16,7 +16,7 @@ from catalog.generations import GenerationStore
 from catalog.model_config import configured_model_id
 from catalog.status import rebuild_hint
 from catalog.store import CatalogStore
-from managers.chroma_db_manager import ChromaDbManager, VectorStoreUnavailable
+from managers.chroma_db_manager import ChromaDbManager, VectorStoreUnavailable, _is_fatal
 
 logger = logging.getLogger(__name__)
 
@@ -119,12 +119,42 @@ class ActiveIndex:
                                                             model_id=gen["model_id"])
         except embedding_utils.ModelUnavailable:
             raise SearchUnavailable("model_missing", _model_missing_hint(gen["model_id"]))
-        return mgr.search(embedding, max_results, ids=ids)
+        except BaseException as e:
+            if _is_fatal(e):
+                raise
+            # Files present but unusable (missing tokenizer.json, corrupt ONNX, ...).
+            logger.exception("Could not load embedding model %r.", gen["model_id"])
+            raise SearchUnavailable("model_load_failed", _model_load_failed_hint(gen["model_id"], e))
+        hits, missing = mgr.search(embedding, max_results, ids=ids)
+        if missing:
+            self._forget_missing_vectors(gen, missing)
+        return hits
+
+    def _forget_missing_vectors(self, gen: dict, vector_ids: list) -> None:
+        """Drop ``asset_vectors`` rows whose vector is not in the collection, so those assets
+        count as missing and the next index run re-embeds them."""
+        try:
+            assets = self.gens.assets_for_vectors(gen["id"], vector_ids)
+            self.gens.drop_vectors(gen["id"], list(assets.values()))
+        except Exception:
+            logger.exception("Could not drop stale vector rows of generation %d.", gen["id"])
+            return
+        logger.warning("Generation %d: %d vector(s) recorded but not in %r; marked missing so "
+                       "the next index run re-embeds them.", gen["id"], len(assets),
+                       gen["collection_name"])
 
 
 def _model_missing_hint(model_id: str) -> str:
     return (f"The active index was built with '{model_id}', whose model files are not "
             f"available locally. Restore that model, or rebuild the index: "
+            f"{rebuild_hint(configured_model_id())}")
+
+
+def _model_load_failed_hint(model_id: str, error: BaseException) -> str:
+    directory = embedding_utils.model_dir(model_id)
+    return (f"The model files for '{model_id}' in '{directory}' could not be loaded "
+            f"({type(error).__name__}: {error}). Re-export or restore that model (e.g. delete "
+            f"the directory and restart the server), or rebuild the index: "
             f"{rebuild_hint(configured_model_id())}")
 
 

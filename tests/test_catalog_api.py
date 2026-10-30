@@ -46,11 +46,13 @@ def _build(builder, model_id):
 class FakeAnalyzer:
     def __init__(self, skus):
         self.skus = list(skus)
+        self.sku_reads = 0
 
     def count_skus(self):
         return len(set(self.skus))
 
     def get_all_skus(self):
+        self.sku_reads += 1
         return list(self.skus)
 
     def get_content_roots(self):
@@ -79,6 +81,7 @@ def _patch_server(monkeypatch, tmp_path, catalog, gens, chroma_path, analyzer):
     monkeypatch.setattr(server, "spawn_worker", lambda store: None)
     monkeypatch.setattr(server, "load_embedding_model", lambda: None)
     monkeypatch.setattr(server, "daz_pg_analyzer", analyzer)
+    monkeypatch.setattr(server, "_cms_cache", None)
     return server
 
 
@@ -447,3 +450,89 @@ def test_cli_stats_reports_generation(cli, env, capsys):
     assert f"Active generation:       {env.active['id']} (fake/model-a, dim 8)" in out
     assert "Total Documents Indexed: 3" in out
     assert "Genesis 8.1 Female" in out
+
+
+# ── Fix round 1 ───────────────────────────────────────────────────────────────
+
+def test_unloadable_model_returns_503(api, monkeypatch):
+    # Files present (model_available is True) but loading them fails.
+    def broken(texts, is_query=False, model_id=None):
+        raise RuntimeError("tokenizer.json not found")
+    monkeypatch.setattr(embedding_utils, "generate_embeddings", broken)
+    for path, body in (("/api/v1/search", {"query": "robe"}), ("/api/v1/query", {"prompt": "robe"})):
+        r = api.post(path, json=body)
+        assert r.status_code == 503, path
+        detail = r.json()["detail"]
+        assert detail["reason"] == "model_load_failed"
+        assert "fake/model-a" in detail["repair"] and "tokenizer.json not found" in detail["repair"]
+
+
+def test_status_caches_cms_snapshot(api, env, monkeypatch):
+    env.analyzer.skus = ["1", "9"]
+    assert api.get("/api/v1/status").json()["new_products"] == 1
+    env.analyzer.skus = ["1", "9", "10"]
+    assert api.get("/api/v1/status").json()["new_products"] == 1  # within the TTL
+    api.get("/api/v1/health")
+    assert env.analyzer.sku_reads == 1
+    monkeypatch.setattr(env.server, "_CMS_TTL_SECONDS", 0)
+    assert api.get("/api/v1/status").json()["new_products"] == 2
+    assert env.analyzer.sku_reads == 2
+
+
+def test_pending_count_matches_pending(env):
+    other = env.other_process()
+    gen = other.builder.start_or_resume_rebuild("fake/model-b", refetch=False)
+    assert env.gens.pending_count(gen["id"]) == len(env.gens.pending(gen["id"])) == 3
+    other.builder.embed_pending(gen, limit=1)
+    assert env.gens.pending_count(gen["id"]) == len(env.gens.pending(gen["id"])) == 2
+    other.gens.record_error(gen["id"], ["daz:3"], "boom")
+    for attempts in (1, 3):
+        assert env.gens.pending_count(gen["id"], attempts) == len(env.gens.pending(gen["id"], attempts))
+    assert env.gens.pending_count(env.active["id"]) == len(env.gens.pending(env.active["id"])) == 0
+
+
+def test_present_keys(env):
+    assert env.catalog.present_keys(CMS_SOURCE) == {"1", "2"}
+    assert env.catalog.present_keys(WEB_SOURCE) == {"1", "2", "3"}
+
+
+def _break_status_reads(env, monkeypatch):
+    import sqlite3
+
+    def locked(*a, **k):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(env.catalog, "asset_totals", locked)
+
+
+def test_health_reports_catalog_read_error(api, env, monkeypatch):
+    _break_status_reads(env, monkeypatch)
+    h = api.get("/api/v1/health").json()
+    assert h["status"] == "degraded"
+    catalog = h["components"]["catalog"]
+    assert catalog["ok"] is False and "database is locked" in catalog["error"]
+    for component in (catalog, h["components"]["vector_store"]):
+        assert "rebuild" not in component["repair"] and "server log" in component["repair"]
+    assert "No active index generation" not in h["components"]["vector_store"]["error"]
+
+
+def test_info_returns_503_on_catalog_read_error(api, env, monkeypatch):
+    _break_status_reads(env, monkeypatch)
+    r = api.get("/api/v1/info")
+    assert r.status_code == 503 and r.json()["detail"]["reason"] == "catalog_unavailable"
+
+
+def test_vector_missing_from_collection_is_marked_missing(api, env, caplog):
+    import chromadb
+    chromadb.PersistentClient(path=env.chroma_path).get_collection(
+        env.active["collection_name"]).delete(ids=["daz:1"])  # behind the catalog's back
+    r = api.post("/api/v1/search", json={"query": "robe", "filters": {"artist": "Ann"}})
+    assert r.status_code == 200, r.text
+    assert {x["sku"] for x in r.json()["results"]} == {"3"}
+    assert "reconnecting" not in caplog.text
+    assert api.get("/api/v1/health").json()["components"]["vector_store"]["ok"] is True
+    assert env.gens.pending(env.active["id"]) == ["daz:1"]
+    # Healed: the next filtered search no longer asks Chroma for the unknown id.
+    caplog.clear()
+    r = api.post("/api/v1/search", json={"query": "robe", "filters": {"artist": "Ann"}})
+    assert {x["sku"] for x in r.json()["results"]} == {"3"}
+    assert "not in" not in caplog.text
