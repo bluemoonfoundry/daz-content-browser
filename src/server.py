@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import sqlite3
 import subprocess
 import sys
 import time
@@ -8,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Literal, Optional
 
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -16,7 +17,10 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 import embedding_utils
+from catalog.active_index import SearchUnavailable, mcp_response
 from catalog.model_config import DEFAULT_MODEL_ID, SETTINGS_PATH, configured_model_id
+from catalog.status import index_status, migration_hint, pending_cms_diff, rebuild_hint
+from catalog.store import CMS_SOURCE
 from embedding_utils import load_embedding_model
 from demo_data import (
     get_demo_search_results as search_mock,
@@ -29,7 +33,7 @@ from utilities import open_daz_product
 from index_worker import spawn_worker, worker_log_path
 from managers.chroma_db_manager import VectorStoreUnavailable
 from managers.job_store import FAILED, QUEUED, RUNNING, JobConflict, public_view
-from managers.managers import chroma_db_manager, daz_pg_analyzer, sqlite_db, daz_script_server, job_store
+from managers.managers import active_index, catalog, daz_pg_analyzer, daz_script_server, generations, job_store
 from security import (
     SESSION_COOKIE,
     allowed_origins,
@@ -123,14 +127,107 @@ def _require_in_roots(path: str) -> Path:
     return resolved
 
 
+# ── Catalog guards ─────────────────────────────────────────────────────────────
+
+@contextmanager
+def _catalog_reads():
+    """Turns an unusable catalog into a 503 with a reason, instead of a bare 500.
+
+    While the catalog migration has failed, product reads are refused outright (startup is
+    not blocked; a restart retries the migration). A SQLite error on a read (locked,
+    damaged) is reported the same way.
+    """
+    if catalog.migration_error:
+        raise HTTPException(status_code=503, detail={
+            "reason": "migration_failed", "repair": migration_hint(catalog.migration_error)})
+    try:
+        yield
+    except sqlite3.Error as e:
+        logger.exception("Catalog read failed.")
+        raise HTTPException(status_code=503, detail={
+            "reason": "catalog_unavailable",
+            "repair": f"The local catalog could not be read ({type(e).__name__}: {e}). "
+                      f"Retry shortly; if it persists, check the server log."})
+
+
+def _cms_snapshot() -> tuple:
+    """``(postgres_count, pending_cms)`` from the DAZ CMS; ``(-1, None)`` when unreachable.
+
+    ``pending_cms`` is a key-set diff of CMS SKUs against the catalog's present CMS records
+    (``{"new", "removed"}``), or None when either side can't be read.
+    """
+    if daz_pg_analyzer is None:
+        return -1, None
+    try:
+        count = daz_pg_analyzer.count_skus()
+    except Exception:
+        logger.warning("DAZ CMS count failed.", exc_info=True)
+        return -1, None
+    if count is None or count < 0:
+        return -1, None
+    if catalog.migration_error:
+        return count, None
+    try:
+        skus = daz_pg_analyzer.get_all_skus()
+        if count > 0 and not skus:  # get_all_skus() answers [] on a query error
+            return count, None
+        return count, pending_cms_diff(skus, catalog.source_index(CMS_SOURCE))
+    except Exception:
+        logger.warning("Could not diff DAZ CMS SKUs against the catalog.", exc_info=True)
+        return count, None
+
+
+def _index_snapshot() -> dict:
+    """Everything /status, /health and /info report about the index, read once."""
+    try:
+        job_active = job_store.active() is not None
+    except Exception:
+        logger.warning("Could not read the job store.", exc_info=True)
+        job_active = False
+    postgres_count, pending = _cms_snapshot()
+    configured = configured_model_id()
+    idx = index_status(catalog, generations, configured, pending is not None, pending, job_active)
+
+    vector_store = None  # None: no active generation (or no readable catalog)
+    if not catalog.migration_error and idx["error"] is None:
+        try:
+            vector_store = active_index.health()
+        except Exception as e:
+            vector_store = {"ok": False, "error": f"{type(e).__name__}: {e}",
+                            "repair": "Check the server log; `vab index repair` rebuilds the index."}
+
+    if catalog.migration_error:
+        repair = migration_hint(catalog.migration_error)
+    elif idx["error"]:
+        repair = (f"The local catalog could not be read ({idx['error']}). Retry shortly; if it "
+                  f"persists, check the server log.")
+    elif vector_store is not None and not vector_store["ok"]:
+        repair = vector_store.get("repair")
+    elif idx["rebuild_required"]:
+        repair = rebuild_hint(configured)
+    else:
+        repair = idx["resume_hint"]
+    degraded = bool(catalog.migration_error or idx["error"] or idx["rebuild_required"]
+                    or (vector_store is not None and not vector_store["ok"]))
+    return {"index": idx, "vector_store": vector_store, "postgres_count": postgres_count,
+            "pending": pending, "configured": configured, "repair": repair, "degraded": degraded}
+
+
+def _vector_count(idx: dict) -> int:
+    vectors = idx["vectors"]
+    if vectors is None:
+        return -1 if (idx["migration_error"] or idx["error"]) else 0
+    return vectors["current"] + vectors["stale"]
+
+
 # ── Format helpers ─────────────────────────────────────────────────────────────
 
-def _format_product(row: dict) -> dict:
-    """Strips internal fields, parses comma-separated fields to lists, normalises shape.
+_INTERNAL_FIELDS = ("embedding_text", "doc_hash", "doc_format_version", "distance", "installed")
 
-    Safe to call on both full SQLite rows and partial ChromaDB metadata dicts.
-    """
-    result = {k: v for k, v in row.items() if k not in ("embedding_text",)}
+
+def _format_product(row: dict) -> dict:
+    """Strips internal fields, parses comma-separated fields to lists, normalises shape."""
+    result = {k: v for k, v in row.items() if k not in _INTERNAL_FIELDS}
     for field in ("compatible_figures", "subcategories", "tags"):
         raw = result.get(field) or ""
         if not isinstance(raw, list):
@@ -140,7 +237,7 @@ def _format_product(row: dict) -> dict:
         result["artist"] = [x.strip() for x in raw_artist.split(",") if x.strip()]
     result["store_url"] = result.pop("url", None) or ""
     result["install_date"] = result.get("enriched_at")
-    result["is_installed"] = True
+    result["is_installed"] = bool(row["installed"]) if "installed" in row else True
     result["asset_count"] = result.get("asset_count") or 0
     return result
 
@@ -214,9 +311,19 @@ async def lifespan(app: FastAPI):
             f"[embedding] Model not loaded — search and indexing will be unavailable: {exc}"
         )
     if APP_MODE != "demo":
-        health = chroma_db_manager.health()
-        if not health["ok"]:
-            logger.error(f"Vector store unavailable — search is degraded. {health['repair']}")
+        if catalog.migration_error:
+            logger.error(f"Catalog unavailable — {migration_hint(catalog.migration_error)}")
+        else:
+            try:
+                health = active_index.health()
+            except Exception:
+                logger.exception("Could not check the active index.")
+            else:
+                if health is None:
+                    logger.warning("No active index generation — search is unavailable. "
+                                   + rebuild_hint(configured_model_id()))
+                elif not health["ok"]:
+                    logger.error(f"Vector store unavailable — search is degraded. {health['repair']}")
         _reconcile_jobs()
     yield
 
@@ -240,6 +347,11 @@ app.middleware("http")(host_origin_guard)
 @app.exception_handler(VectorStoreUnavailable)
 def vector_store_unavailable(request: Request, exc: VectorStoreUnavailable):
     return JSONResponse(status_code=503, content={"detail": str(exc), "repair": exc.repair})
+
+
+@app.exception_handler(SearchUnavailable)
+def search_unavailable(request: Request, exc: SearchUnavailable):
+    return JSONResponse(status_code=503, content={"detail": {"reason": exc.reason, "repair": exc.repair}})
 
 _auth = [Depends(require_token)]
 _read = [Depends(require_read_access)]
@@ -324,26 +436,30 @@ class SettingsPayload(BaseModel):
 
 @app.get("/api/v1/status", dependencies=_read)
 def get_status():
-    """Index counts plus connection health. Polled frequently by the UI."""
+    """Index counts plus connection health. Polled frequently by the UI.
+
+    The legacy top-level keys are kept (deprecated); ``index`` carries the
+    reconciliation-backed detail (see catalog.status.index_status).
+    """
     if APP_MODE == "demo":
         return get_demo_status_mock()
 
-    vector_store = chroma_db_manager.health()
-    chromadb_count = vector_store.get("count", -1)
-    sqlite_count = sqlite_db.count()
-    postgres_count = daz_pg_analyzer.count_skus() if daz_pg_analyzer else -1
-    new_products = max(0, postgres_count - max(chromadb_count, 0))
+    snap = _index_snapshot()
+    idx, vector_store, pending = snap["index"], snap["vector_store"], snap["pending"]
+    postgres_count = snap["postgres_count"]
+    sqlite_count = idx["assets"]["total"] if idx["assets"] else -1
     return {
-        "status": "ok" if vector_store["ok"] else "degraded",
+        "status": "degraded" if snap["degraded"] else "ok",
         "postgres_connected": postgres_count >= 0,
         "sqlite_connected": sqlite_count >= 0,
-        "chromadb_connected": vector_store["ok"],
+        "chromadb_connected": bool(vector_store and vector_store["ok"]),
         "postgres_count": postgres_count,
         "sqlite_count": sqlite_count,
-        "chromadb_count": chromadb_count,
-        "new_products": new_products,
-        "update_available": new_products > 0,
-        "repair": vector_store.get("repair"),
+        "chromadb_count": _vector_count(idx),
+        "new_products": pending["new"] if pending else 0,
+        "update_available": bool(pending and (pending["new"] or pending["removed"])),
+        "repair": snap["repair"],
+        "index": idx,
     }
 
 
@@ -354,25 +470,46 @@ def get_health():
     if APP_MODE == "demo":
         return {"status": "ok", "mode": "demo", "components": {}}
 
+    snap = _index_snapshot()
+    idx, configured = snap["index"], snap["configured"]
+    migration_error = catalog.migration_error
+    active = idx["active_generation"]
+
+    vector_store = snap["vector_store"]
+    if vector_store is None:
+        vector_store = {"ok": False, "error": "No active index generation.",
+                        "repair": migration_hint(migration_error) if migration_error
+                        else rebuild_hint(configured)}
+    query_model = active["model_id"] if active else configured
+    flagged = idx["rebuild_required"] or idx["rebuild_interrupted"] or idx["error"]
     components = {
-        "vector_store": chroma_db_manager.health(),
-        "embedding_model": {"ok": embedding_utils.model_loaded()},
-        "sqlite": {"ok": sqlite_db.count() >= 0, "path": sqlite_db.sqlite_db_path},
+        "vector_store": vector_store,
+        "embedding_model": {"ok": embedding_utils.model_available(query_model),
+                            "model_id": query_model,
+                            "loaded": embedding_utils.model_loaded(query_model)},
+        "catalog": {"ok": migration_error is None, "migration_error": migration_error},
+        "index": {"ok": not (idx["rebuild_required"] or idx["error"]),
+                  "rebuild_required": idx["rebuild_required"],
+                  "rebuild_reason": idx["rebuild_reason"],
+                  "rebuild_interrupted": idx["rebuild_interrupted"],
+                  "repair": snap["repair"] if flagged else None},
+        "sqlite": {"ok": idx["assets"] is not None, "path": catalog.db_path},
         "postgres": {"ok": daz_pg_analyzer is not None},
     }
     if not components["embedding_model"]["ok"]:
         components["embedding_model"]["repair"] = (
-            f"Search and indexing need the ONNX model for '{configured_model_id()}', which is not "
-            f"loaded. Restart the server (or rebuild the index) to use it; check the server log "
-            f"if it still fails."
+            f"Search needs the ONNX model for '{query_model}' (the active index's model), whose "
+            f"files are not available locally. Restore it, or rebuild: {rebuild_hint(configured)}"
         )
+    if migration_error:
+        components["catalog"]["repair"] = migration_hint(migration_error)
     if not components["postgres"]["ok"]:
         components["postgres"]["repair"] = (
             "Configure the DAZ CMS connection in Settings (or .env) and restart; browse and "
             "search still work from the local index."
         )
     if not components["sqlite"]["ok"]:
-        components["sqlite"]["repair"] = "Run `vab load` to build the local product cache."
+        components["sqlite"]["repair"] = snap["repair"]
     try:
         _reconcile_jobs()
         latest = job_store.latest()
@@ -467,8 +604,10 @@ def list_products(
     name_query: Optional[str] = None,
     sort_by: str = "name",
     sort_dir: str = "asc",
+    is_installed: Optional[bool] = None,
 ):
-    """Paginated product listing with optional filters and sort."""
+    """Paginated product listing with optional filters and sort. `is_installed` filters on
+    whether the product is currently in the DAZ CMS (removed products stay listed)."""
     if APP_MODE == "demo":
         from demo_data import DUMMY_PRODUCTS
         all_products = DUMMY_PRODUCTS
@@ -504,16 +643,18 @@ def list_products(
         import math
         return {"products": products, "total": total, "page": page, "page_size": page_size, "total_pages": max(1, math.ceil(total / page_size))}
 
-    result = sqlite_db.get_products(
-        page=page,
-        page_size=page_size,
-        category=category,
-        artist=artist,
-        compatible_figure=compatible_figure,
-        name_query=name_query,
-        sort_by=sort_by,
-        sort_dir=sort_dir,
-    )
+    with _catalog_reads():
+        result = catalog.get_products(
+            page=page,
+            page_size=page_size,
+            category=category,
+            artist=artist,
+            compatible_figure=compatible_figure,
+            name_query=name_query,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            installed=is_installed,
+        )
     result["products"] = [_format_product(r) for r in result["products"]]
     return result
 
@@ -527,7 +668,8 @@ def get_product(sku: str):
             raise HTTPException(status_code=404, detail=f"Product '{sku}' not found.")
         return product
 
-    row = sqlite_db.get_sku_row(sku)
+    with _catalog_reads():
+        row = catalog.get_by_sku(sku)
     if not row:
         raise HTTPException(status_code=404, detail=f"Product '{sku}' not found in local index.")
     return _format_product(row)
@@ -545,7 +687,8 @@ def open_product(sku: str):
 
     Uses the DAZ Script Server plugin when available; falls back to subprocess launch.
     """
-    row = sqlite_db.get_sku_row(sku)
+    with _catalog_reads():
+        row = catalog.get_by_sku(sku)
     if not row:
         raise HTTPException(status_code=404, detail=f"Product '{sku}' not found.")
     product_name = row.get("name") or sku
@@ -571,7 +714,8 @@ def get_filters():
     """All valid filter values (categories, artists, compatible figures)."""
     if APP_MODE == "demo":
         return get_demo_filters_mock()
-    return sqlite_db.get_filter_values()
+    with _catalog_reads():
+        return catalog.get_filter_values()
 
 
 # ── Search ─────────────────────────────────────────────────────────────────────
@@ -609,37 +753,48 @@ def run_search(request: UISearchRequest):
         return {"results": results, "total": len(results), "query": request.query, "took_ms": 0}
 
     f = request.filters or SearchFilters()
-    raw = chroma_db_manager.search(
-        prompt=request.query,
-        limit=request.max_results,
-        offset=0,
-        max_results=request.max_results,
-        categories=[f.category] if f.category else None,
-        artists=[f.artist] if f.artist else None,
-        compatible_figures=[f.compatible_figures] if f.compatible_figures else None,
-        score_threshold=1.0,
-        sort_by="relevance",
-        sort_order="descending",
-    )
-    results = [
-        _format_product({**r.get("metadata", {}), "relevance_score": r.get("relevance_score")})
-        for r in raw.get("results", [])
-    ]
+    started = time.monotonic()
+    with _catalog_reads():
+        rows = active_index.search(
+            catalog,
+            request.query,
+            max_results=request.max_results,
+            category=f.category or None,
+            artists=[f.artist] if f.artist else None,
+            compatible_figures=[f.compatible_figures] if f.compatible_figures else None,
+        )
+    results = [_format_product(r) for r in rows]
+    if f.is_installed is not None:
+        results = [r for r in results if r["is_installed"] == f.is_installed]
     if request.min_relevance > 0:
         results = [r for r in results if r.get("relevance_score", 0) >= request.min_relevance]
-    return {"results": results, "total": len(results), "query": request.query, "took_ms": raw.get("took_ms", 0)}
+    took_ms = int((time.monotonic() - started) * 1000)
+    return {"results": results, "total": len(results), "query": request.query, "took_ms": took_ms}
+
+
+# Fixed candidate pool for /query: total_hits stays stable across offset/limit pages.
+_QUERY_POOL = 500
 
 
 @app.post("/api/v1/query", dependencies=_read)
 def run_query(request: QueryRequest):
     """MCP-oriented semantic search (prompt-based, full filter set)."""
     logger.info(f"Query: {request}")
-    result = (
-        search_mock(**request.model_dump())
-        if APP_MODE == "demo"
-        else chroma_db_manager.search(**request.model_dump())
-    )
-    return result
+    if APP_MODE == "demo":
+        return search_mock(**request.model_dump())
+    with _catalog_reads():
+        rows = active_index.search(
+            catalog,
+            request.prompt,
+            max_results=_QUERY_POOL,
+            category=request.categories,
+            artists=request.artists,
+            compatible_figures=request.compatible_figures,
+            tags=request.tags,
+        )
+    return mcp_response(rows, limit=request.limit, offset=request.offset,
+                        score_threshold=request.score_threshold, sort_by=request.sort_by,
+                        sort_order=request.sort_order)
 
 
 # ── Settings ───────────────────────────────────────────────────────────────────
@@ -796,7 +951,8 @@ def get_assets(sku: str):
 def browse_product(product_id: str):
     if APP_MODE == "demo":
         return {"status": "ok"}
-    row = sqlite_db.get_sku_row(product_id)
+    with _catalog_reads():
+        row = catalog.get_by_sku(product_id)
     product_name = (row.get("name") if row else None) or product_id
     success = open_daz_product(args=type("obj", (object,), {"product": product_name}))
     if not success:
@@ -811,19 +967,20 @@ def get_info():
         logger.info("Demo mode: returning mock database stats.")
         return get_demo_stats_mock()
 
-    total_docs = chroma_db_manager.collection.count()
-    if total_docs == 0:
-        raise HTTPException(status_code=404, detail="Database collection not found or empty.")
-
-    filter_values = sqlite_db.get_filter_values()
-    last_update = sqlite_db.get_last_updated()
-    postgres_count = daz_pg_analyzer.count_skus() if daz_pg_analyzer else -1
-    sqlite_count = sqlite_db.count()
+    with _catalog_reads():
+        snap = _index_snapshot()
+        total_docs = max(_vector_count(snap["index"]), 0)
+        if total_docs == 0:
+            raise HTTPException(status_code=404, detail="Database collection not found or empty.")
+        filter_values = catalog.get_filter_values()
+        last_update = catalog.get_last_updated()
+        sqlite_count = catalog.count()
+    postgres_count = snap["postgres_count"]
+    new_products = snap["pending"]["new"] if snap["pending"] else 0
 
     logger.info(
         f"/info: postgres={postgres_count}, sqlite={sqlite_count}, "
-        f"chromadb={total_docs}, "
-        f"new_products={max(0, postgres_count - total_docs)}"
+        f"chromadb={total_docs}, new_products={new_products}"
     )
 
     return {
@@ -836,7 +993,7 @@ def get_info():
         },
         "total_products_postgres": postgres_count,
         "total_products_sqlite": sqlite_count,
-        "new_products": max(0, postgres_count - total_docs),
+        "new_products": new_products,
     }
 
 

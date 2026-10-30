@@ -3,7 +3,6 @@ real subprocess), a degraded vector store, and the API's job endpoints."""
 import os
 import time
 
-import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
@@ -303,17 +302,29 @@ def test_repair_quarantines_an_unopenable_store(broken_chroma, tmp_path):
 # ── API, production mode ──────────────────────────────────────────────────────
 
 @pytest.fixture
-def prod(monkeypatch, tmp_path, broken_chroma):
+def prod(monkeypatch, tmp_path, broken_chroma, fake_embedder):
     import server
-    from managers import chroma_db_manager as chroma_module
+    from catalog.active_index import ActiveIndex
+    from catalog.documents import DOC_FORMAT_VERSION
+    from catalog.generations import GenerationStore
+    from catalog.schema import LATEST_VERSION
+    from catalog.store import CatalogStore
+
+    # An active generation whose collection lives in the unopenable store.
+    monkeypatch.setenv("EMBEDDING_MODEL_OVERRIDE", "fake/model-a")
+    db = str(tmp_path / "catalog.db")
+    catalog = CatalogStore(db)
+    gens = GenerationStore(db)
+    gens.create_active_adopted("daz_products2", "fake/model-a", 8, DOC_FORMAT_VERSION, LATEST_VERSION)
 
     spawned = []
     monkeypatch.setattr(server, "APP_MODE", "production")
-    monkeypatch.setattr(server, "chroma_db_manager", broken_chroma)
+    monkeypatch.setattr(server, "catalog", catalog)
+    monkeypatch.setattr(server, "generations", gens)
+    monkeypatch.setattr(server, "active_index", ActiveIndex(gens, broken_chroma.chroma_db_path))
     monkeypatch.setattr(server, "job_store", JobStore(str(tmp_path / "api_jobs.db")))
     monkeypatch.setattr(server, "spawn_worker", lambda store: spawned.append(store))
     monkeypatch.setattr(server, "load_embedding_model", lambda: None)
-    monkeypatch.setattr(chroma_module, "generate_embeddings", lambda *a, **k: np.zeros(4))
     server.spawned = spawned
     return server
 

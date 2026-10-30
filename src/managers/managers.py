@@ -6,6 +6,7 @@ from .sqlite_db_manager import SQLiteWrapper
 from .chroma_db_manager import ChromaDbManager
 from .job_store import JobStore
 from .daz_script_server import DazScriptServerClient
+from catalog.active_index import ActiveIndex
 from catalog.builder import GenerationBuilder
 from catalog.generations import GenerationStore
 from catalog.store import CatalogStore
@@ -20,8 +21,8 @@ sqlite_db = SQLiteWrapper(
     sqlite_db_table = os.environ.get("SQLITE_TABLE_NAME")
 )
 
-# Opens lazily: a missing or corrupt store degrades search instead of blocking startup.
-# Kept only until the search/status endpoints move onto the generation catalog.
+# Legacy handle on the pre-generations collection; nothing in the API or CLI reads it any
+# more (search/status use ``active_index``). Removed with ``sqlite_db`` in a follow-up.
 chroma_db_manager = ChromaDbManager(
     os.environ.get("CHROMA_PATH", "chroma_db"),
     os.environ.get("CHROMA_COLLECTION", "daz_products2")
@@ -48,6 +49,10 @@ builder = GenerationBuilder(
     catalog, generations, os.environ.get("CHROMA_PATH", "chroma_db"),
     legacy_collection=os.environ.get("CHROMA_COLLECTION", "daz_products2"),
 )
+
+# What the API searches: the active generation's collection, re-read on every call so a
+# promotion by the worker process is picked up. Opens lazily, like every Chroma handle.
+active_index = ActiveIndex(generations, os.environ.get("CHROMA_PATH", "chroma_db"))
 
 job_store = JobStore(os.path.abspath(os.environ.get("JOBS_DB_PATH", "index_jobs.db")))
 

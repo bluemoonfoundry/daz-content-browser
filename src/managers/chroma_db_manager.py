@@ -1,11 +1,11 @@
 """ Manages interactions with ChromaDB for vector storage and retrieval. """
 
 import chromadb
+from chromadb.errors import NotFoundError
 import logging
 import os
 import time
 from typing import List, Optional
-from embedding_utils import generate_embeddings
 
 logger = logging.getLogger(__name__)
 
@@ -80,60 +80,10 @@ def quarantine_store(chroma_db_path: str, reason: str = "") -> str:
     return quarantine
 
 
-def build_where_clause(
-    tags: Optional[List[str]] = None,
-    artists: Optional[List[str]] = None,
-    categories: Optional[List[str]] = None,
-    compatible_figures: Optional[List[str]] = None,
-):
-    """
-    Dynamically builds a ChromaDB 'where' filter for multiple fields.
-    Uses $and for criteria across different fields (e.g., category AND artist)
-    and $or for criteria within the same field (e.g., category is Clothing OR Hair).
-    """
-
-    # Conditions that must ALL be met are added to this list
-    if not any([tags, artists, categories, compatible_figures]):
-        return None
-
-    and_conditions = []
-
-    # Helper function to create a filter block for a list of values
-    def create_or_condition(field_name: str, values: List[str]):
-        if not values:
-            return
-
-        # For the 'category' field, which is a single string, we use exact match ($eq)
-        if field_name == "category":
-            conditions = [{field_name: {"$eq": value}} for value in values]
-        # For fields stored as JSON strings of lists, we use substring matching ($contains)
-        else:
-            conditions = [{field_name: {"$contains": value}} for value in values]
-
-        if len(conditions) > 1:
-            and_conditions.append({"$or": conditions})
-        elif conditions:
-            and_conditions.append(conditions[0])
-
-    # Build conditions for each filter type passed to the function
-    if tags:               create_or_condition("tags", tags)
-    if artists:            create_or_condition("artist", artists)
-    if categories:         create_or_condition("category", categories)
-    if compatible_figures: create_or_condition("compatible_figures", compatible_figures)
-
-    # Return the final filter structure for the ChromaDB query
-    if not and_conditions:
-        return None
-    if len(and_conditions) == 1:
-        return and_conditions[0]
-
-    return {"$and": and_conditions}
-
-
 class ChromaDbManager:
     """Handles all interactions with ChromaDB."""
 
-    def __init__(self, chroma_db_path:str, collection_name:str):
+    def __init__(self, chroma_db_path:str, collection_name:str, create: bool = True):
         """Create a ChromaDB manager instance.
 
         The store is opened lazily on first use, so a missing or corrupt store never
@@ -142,10 +92,14 @@ class ChromaDbManager:
         Args:
             chroma_db_path (str): Path to the ChromaDB database directory.
             collection_name (str): Name of the collection to use within ChromaDB.
+            create (bool): Create the collection if it does not exist. Readers of an index
+                generation pass False, so a collection dropped by another process is
+                reported missing instead of being silently re-created empty.
         """
 
         self.chroma_db_path = chroma_db_path
         self.collection_name = collection_name
+        self.create = create
         self._client = None
         self._collection = None
         self.last_error: Optional[str] = None
@@ -153,14 +107,19 @@ class ChromaDbManager:
     def _open(self) -> None:
         try:
             client = chromadb.PersistentClient(path=self.chroma_db_path)
-            collection = client.get_or_create_collection(
-                name=self.collection_name,
-                metadata={"hnsw:space": "cosine"},
-            )
+            if self.create:
+                collection = client.get_or_create_collection(
+                    name=self.collection_name,
+                    metadata={"hnsw:space": "cosine"},
+                )
+            else:
+                collection = client.get_collection(name=self.collection_name)
         except BaseException as e:
             if _is_fatal(e):
                 raise
-            self._forget_cached_system()
+            if not isinstance(e, NotFoundError):
+                # A missing collection says nothing about the store; keep its System.
+                self._forget_cached_system()
             err = VectorStoreUnavailable(self.chroma_db_path, self.collection_name, e)
             self.last_error = err.cause
             logger.error(str(err))
@@ -323,110 +282,44 @@ class ChromaDbManager:
             return (f"Store could not be opened; moved it to {quarantine!r} and created a fresh one. "
                     "Other collections in it (e.g. morphs) must be re-indexed.")
 
-    def search(
-        self,
-        prompt: str,
-        tags: Optional[List[str]] = None,
-        artists: Optional[List[str]] = None,
-        categories: Optional[List[str]] = None,
-        compatible_figures: Optional[List[str]] = None,
-        limit: int = 10,
-        offset: int = 0,
-        max_results: int = 500,
-        score_threshold: float = 1.0,
-        sort_by: str = "relevance",
-        sort_order: str = "descending",
-    ):
-        """Searches the ChromaDB collection with the given parameters.
+    def search(self, query_embedding, n_results: int, ids: Optional[List[str]] = None) -> list:
+        """Nearest vectors to ``query_embedding``: ``[{"id", "distance"}]``, closest first.
 
-        Args:
-            prompt (str): The search prompt to generate the query embedding.
-            tags (List[str], optional): List of tags to filter by. Defaults to None.
-            artists (List[str], optional): List of artists to filter by. Defaults to None.
-            categories (List[str], optional): List of categories to filter by. Defaults to None.
-            compatible_figures (List[str], optional): List of compatible figures to filter by. Defaults to None.
-            limit (int, optional): Number of results to return from the filtered set. Defaults to 10.
-                Used by the MCP /query endpoint. The UI /search endpoint uses max_results instead.
-            offset (int, optional): Offset into the filtered result set. Defaults to 0.
-                Used by the MCP /query endpoint. The UI /search endpoint always passes 0.
-            max_results (int, optional): Maximum number of candidates to fetch from ChromaDB.
-                This is the fixed pool size — independent of limit/offset — so total_hits is
-                stable across requests. Defaults to 500. The UI /search endpoint controls this
-                directly; the MCP /query endpoint leaves it at the default.
-            score_threshold (float, optional): Maximum cosine distance for a result to be
-                included. Defaults to 1.0 (include everything).
-            sort_by (str, optional): Field to sort by. Use 'relevance' for cosine-distance order
-                (default), or any metadata field name (e.g. 'name', 'artist').
-            sort_order (str, optional): 'ascending' or 'descending'. Only applied when
-                sort_by is not 'relevance'. Defaults to 'descending'.
-
-        Returns:
-            dict: Search results including total_hits, limit, offset, and list of results.
+        ``ids`` restricts the query to those vector ids (exact filtering is resolved by the
+        caller from the catalog); an empty list matches nothing. Ids the collection does not
+        hold are dropped instead of failing the query.
         """
-
-        # --- 1. Generate Query Embedding ---
-        query_embedding = generate_embeddings(prompt, is_query=True)
-
-        # --- 2. Build the Combined Metadata Filter ---
-        where_filter = build_where_clause(
-            tags=tags,
-            artists=artists,
-            categories=categories,
-            compatible_figures=compatible_figures,
-        )
-        if where_filter:
-            logger.debug(f"Applying metadata filter: {where_filter}")
-
-        # Fixed candidate pool — does not grow with offset/limit so total_hits is stable.
-        query_limit = max_results
-
-        # --- 3. Query ChromaDB ---
-
-        results = self._query_with_reconnect(
-            query_embeddings=[query_embedding.tolist()],
-            n_results=query_limit,
-            where=where_filter,
-            include=["metadatas", "distances", "documents"],
-        )
-
-
-        # --- 4. Post-process Results (Filtering by Score) ---
-        processed_results = []
-        if results["ids"]:
-            for i in range(len(results["ids"][0])):
-                dist = results["distances"][0][i]
-                if dist <= score_threshold:
-                    processed_results.append(
-                        {
-                            "id": results["ids"][0][i],
-                            "distance": dist,
-                            "relevance_score": round(1.0 - dist, 4),
-                            "metadata": results["metadatas"][0][i],
-                        }
-                    )
-
-        # --- 5. Sorting Logic ---
-        reverse_order = sort_order == "descending"
-        if sort_by != "relevance":
-            # Sort by a metadata field, handling potential missing keys gracefully
-            processed_results.sort(
-                key=lambda x: x["metadata"].get(sort_by) or "",  # Fallback for sorting
-                reverse=reverse_order,
-            )
-        # Note: ChromaDB already returns results sorted by relevance (distance ascending)
-
-        # --- 6. Apply Pagination and Return ---
-        paginated_results = processed_results[offset : offset + limit]
-
-        logger.debug(f"Result set size: {len(paginated_results)}")
-
-        return {
-            "total_hits": len(processed_results),
-            "limit": limit,
-            "offset": offset,
-            "results": paginated_results,
-        }
-        
+        if ids is not None:
+            ids = list(dict.fromkeys(ids))
+            if not ids:
+                return []
+            n_results = min(n_results, len(ids))
+        if n_results <= 0:
+            return []
+        embedding = query_embedding.tolist() if hasattr(query_embedding, "tolist") else list(query_embedding)
+        kwargs = dict(query_embeddings=[embedding], n_results=n_results, include=["distances"])
+        try:
+            results = self._query_with_reconnect(ids=ids, **kwargs)
+        except VectorStoreUnavailable as e:
+            # Chroma fails the whole query when any requested id is unknown.
+            if ids is None or "finding id" not in e.cause:
+                raise
+            try:
+                known = set(self.collection.get(ids=ids, include=[])["ids"])
+            except BaseException as lookup:
+                if _is_fatal(lookup):
+                    raise
+                raise e from lookup
+            ids = [i for i in ids if i in known]
+            if not ids:
+                self.last_error = None
+                return []
+            kwargs["n_results"] = min(kwargs["n_results"], len(ids))
+            results = self._query_with_reconnect(ids=ids, **kwargs)
+        if not results["ids"]:
+            return []
+        return [{"id": vid, "distance": dist}
+                for vid, dist in zip(results["ids"][0], results["distances"][0])]
 
     def _query_with_reconnect(self, **kwargs):
         """Queries, reconnecting once on failure.

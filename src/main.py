@@ -21,7 +21,7 @@ from utilities import open_daz_product
 import uvicorn
 
 from managers.job_store import SUCCEEDED, JobConflict, public_view
-from managers.managers import chroma_db_manager, job_store, sqlite_db
+from managers.managers import job_store
 
 
 def _ensure_utf8_console_output() -> None:
@@ -271,23 +271,33 @@ def morphs_index_command(args):
           f"Embed failures: {len(failed_guids)}")
 
 def query_command(args):
-    """Submits a query to the ChromaDB and prints the formatted results."""
-    print("Starting query command...")
+    """Searches the active index generation and prints the formatted results."""
+    from catalog.active_index import SearchUnavailable, mcp_response
+    from managers.managers import active_index, catalog
 
-    # The search function returns a dictionary with 'total_hits', 'results', etc.
-    response = chroma_db_manager.search(
-        prompt=args.prompt,
-        tags=args.tags,
-        limit=args.limit,
-        score_threshold=args.score,
-        sort_by=args.sort_by,
-        sort_order=args.sort_order,
-    )
+    if catalog.migration_error:
+        print(f"Error: the catalog is unavailable: {catalog.migration_error}", file=sys.stderr)
+        sys.exit(1)
+    try:
+        rows = active_index.search(
+            catalog,
+            args.prompt,
+            max_results=500,
+            category=args.categories,
+            artists=args.artists,
+            compatible_figures=args.compatible_figures,
+            tags=args.tags,
+        )
+    except SearchUnavailable as e:
+        print(f"Search unavailable ({e.reason}): {e.repair}", file=sys.stderr)
+        sys.exit(1)
+    response = mcp_response(rows, limit=args.limit, offset=0, score_threshold=args.score,
+                            sort_by=args.sort_by, sort_order=args.sort_order)
 
-    if not response or not response.get("results"):
+    if not response["results"]:
         print("\n--- No results found for your query. ---")
         return
-    
+
     if args.format == 'json':
         print_json(response)
     elif args.format == 'table':
@@ -295,17 +305,42 @@ def query_command(args):
     else: # Default to 'pretty'
         print_pretty(response)
 
+
 def stats_command(args):
-    """Gathers and prints statistics about the ChromaDB collection."""
+    """Prints the active index generation's state and the catalog's filter values."""
+    from catalog.model_config import configured_model_id
+    from catalog.status import index_status, rebuild_hint
+    from managers.managers import catalog, generations
 
+    if catalog.migration_error:
+        print(f"Error: the catalog is unavailable: {catalog.migration_error}", file=sys.stderr)
+        sys.exit(1)
     print("Gathering statistics from the database...")
-    stats = chroma_db_manager.get_db_stats()
-    last_update = sqlite_db.get_last_updated()
-    filter_values = sqlite_db.get_filter_values()
+    configured = configured_model_id()
+    status = index_status(catalog, generations, configured, cms_reachable=False, pending_cms=None,
+                          job_active=job_store.active() is not None)
+    if status["error"]:
+        print(f"Error: could not read the index status: {status['error']}", file=sys.stderr)
+        sys.exit(1)
+    last_update = catalog.get_last_updated()
+    filter_values = catalog.get_filter_values()
+    assets, vectors, active = status["assets"], status["vectors"], status["active_generation"]
 
-    print("\n--- ChromaDB Collection Stats ---")
-    print(f"Total Documents Indexed: {stats['total_docs']}")
+    print("\n--- Index Stats ---")
+    print(f"Products:                {assets['total']} ({assets['installed']} installed, "
+          f"{assets['not_installed']} not installed, {assets['fetch_errors']} fetch errors)")
+    if active:
+        print(f"Active generation:       {active['id']} ({active['model_id']}, dim {active['model_dim']})")
+        print(f"Total Documents Indexed: {vectors['current'] + vectors['stale']}")
+        print(f"Vectors:                 {vectors['current']} current, {vectors['stale']} stale, "
+              f"{vectors['missing']} missing, {vectors['error']} error, {vectors['orphan']} orphan")
+    else:
+        print("Active generation:       none")
     print(f"Last Document Update:    {last_update}")
+    if status["rebuild_required"]:
+        print(f"Rebuild required ({status['rebuild_reason']}): {rebuild_hint(configured)}")
+    if status["resume_hint"]:
+        print(status["resume_hint"])
     print("---------------------------------")
 
     for key, values in filter_values.items():
@@ -356,10 +391,10 @@ def main():
     # Define commands
     parsers = {
         "query": subparsers.add_parser(
-            "query", help="Query the ChromaDB vector store."
+            "query", help="Search the active product index."
         ),
         "stats": subparsers.add_parser(
-            "stats", help="Display stats about the ChromaDB collection."
+            "stats", help="Display stats about the product index."
         ),
         "server": subparsers.add_parser("server", help="Run the FastAPI web server."),
         "load": subparsers.add_parser(
