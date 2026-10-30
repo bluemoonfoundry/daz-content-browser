@@ -32,11 +32,15 @@ def _marks(items: list) -> str:
 
 
 class GenerationStore:
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, ready=None):
+        """``ready`` is called before each connection (e.g. the catalog's lazy migration)."""
         self.db_path = db_path
+        self._ready = ready
 
     @contextmanager
     def _conn(self):
+        if self._ready is not None:
+            self._ready()
         conn = connect(self.db_path)
         conn.isolation_level = None  # autocommit; atomic writes use explicit BEGIN IMMEDIATE
         try:

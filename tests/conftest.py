@@ -1,24 +1,29 @@
+import atexit
 import os
+import shutil
+import tempfile
+
 import pytest
 
 
-@pytest.fixture(scope="session", autouse=True)
-def demo_env(tmp_path_factory):
-    """Run all tests in demo mode with throwaway DB paths."""
-    tmp = tmp_path_factory.mktemp("test_data")
-    os.environ["APP_MODE"] = "demo"
-    os.environ.setdefault("SQLITE_DB_PATH", str(tmp / "test.db"))
-    os.environ.setdefault("SQLITE_TABLE_NAME", "products")
-    os.environ.setdefault("CHROMA_PATH", str(tmp / "chroma"))
-    os.environ.setdefault("CHROMA_COLLECTION", "test_collection")
-    os.environ.setdefault("JOBS_DB_PATH", str(tmp / "index_jobs.db"))
-    # Blank (not unset) so load_dotenv() can't fill them in from .env: tests must never
-    # reach a real DAZ CMS PostgreSQL, running or not
-    for key in ("DB_NAME", "DB_HOST"):
-        os.environ[key] = ""
-    # Fixed API token; keep the token file out of the real ~/.daz3d
-    os.environ["VAB_API_TOKEN"] = "test-token"
-    os.environ["VAB_API_TOKEN_FILE"] = str(tmp / "vab_api_token.txt")
+# The test environment must exist before any test module (and so ``managers.managers``)
+# is imported: pytest imports conftest first, while a session fixture would run too late
+# and ``load_dotenv()`` would already have filled in the real paths from ``.env``.
+_TMP = tempfile.mkdtemp(prefix="vab-tests-")
+atexit.register(shutil.rmtree, _TMP, ignore_errors=True)
+os.environ["APP_MODE"] = "demo"
+os.environ["SQLITE_DB_PATH"] = os.path.join(_TMP, "test.db")
+os.environ["SQLITE_TABLE_NAME"] = "products"
+os.environ["CHROMA_PATH"] = os.path.join(_TMP, "chroma")
+os.environ["CHROMA_COLLECTION"] = "test_collection"
+os.environ["JOBS_DB_PATH"] = os.path.join(_TMP, "index_jobs.db")
+# Blank (not unset) so load_dotenv() can't fill them in from .env: tests must never
+# reach a real DAZ CMS PostgreSQL, running or not
+for _key in ("DB_NAME", "DB_HOST"):
+    os.environ[_key] = ""
+# Fixed API token; keep the token file out of the real ~/.daz3d
+os.environ["VAB_API_TOKEN"] = "test-token"
+os.environ["VAB_API_TOKEN_FILE"] = os.path.join(_TMP, "vab_api_token.txt")
 
 
 @pytest.fixture

@@ -26,11 +26,11 @@ def _open_catalog(db_path, legacy_table) -> CatalogStore:
         store.db_path = None
         store.migration_error = "SQLITE_DB_PATH is not set; the catalog database is unavailable."
         return store
-    return CatalogStore(db_path, legacy_table=legacy_table)
+    return CatalogStore(db_path, legacy_table=legacy_table, lazy=True)
 
 
 catalog = _open_catalog(os.environ.get("SQLITE_DB_PATH"), os.environ.get("SQLITE_TABLE_NAME"))
-generations = GenerationStore(catalog.db_path)
+generations = GenerationStore(catalog.db_path, ready=catalog.ensure_migrated)
 builder = GenerationBuilder(
     catalog, generations, os.environ.get("CHROMA_PATH", "chroma_db"),
     legacy_collection=os.environ.get("CHROMA_COLLECTION", "daz_products2"),

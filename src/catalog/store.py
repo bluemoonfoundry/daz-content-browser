@@ -50,17 +50,39 @@ def _as_list(value) -> list:
 
 
 class CatalogStore:
-    def __init__(self, db_path: str, legacy_table: Optional[str] = None):
+    def __init__(self, db_path: str, legacy_table: Optional[str] = None, lazy: bool = False):
+        """``lazy`` defers the migration to first use, so constructing the store (e.g. at
+        import time) does no SQLite I/O."""
         self.db_path = db_path
-        self.migration_error: Optional[str] = None
+        self._legacy_table = legacy_table
+        self._migration_error: Optional[str] = None
+        self._migrated = False
+        if not lazy:
+            self.ensure_migrated()
+
+    def ensure_migrated(self) -> None:
+        if self._migrated:
+            return
+        self._migrated = True
         try:
-            migrate(db_path, legacy_table=legacy_table)
+            migrate(self.db_path, legacy_table=self._legacy_table)
         except Exception as e:  # never block startup; callers report it via status/health
-            self.migration_error = str(e)
+            self._migration_error = str(e)
             logger.error("Catalog migration failed (restart to retry): %s", e)
+
+    @property
+    def migration_error(self) -> Optional[str]:
+        self.ensure_migrated()
+        return self._migration_error
+
+    @migration_error.setter
+    def migration_error(self, value: Optional[str]) -> None:
+        self._migrated = True
+        self._migration_error = value
 
     @contextmanager
     def _conn(self):
+        self.ensure_migrated()
         conn = connect(self.db_path)
         try:
             with conn:  # commit on success, roll back on error

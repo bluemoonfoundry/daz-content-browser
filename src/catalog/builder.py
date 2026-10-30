@@ -71,6 +71,7 @@ class GenerationBuilder:
     # --- adoption --------------------------------------------------------------------
 
     def _has_generations(self) -> bool:
+        self.catalog.ensure_migrated()
         conn = connect(self.gens.db_path)
         try:
             return conn.execute("SELECT COUNT(*) FROM index_generations").fetchone()[0] > 0
@@ -79,6 +80,7 @@ class GenerationBuilder:
 
     def _views_by_sku(self, skus: list) -> dict:
         out: dict = {}
+        self.catalog.ensure_migrated()
         conn = connect(self.catalog.db_path)
         try:
             for i in range(0, len(skus), _CHUNK):
