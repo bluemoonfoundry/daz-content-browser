@@ -16,6 +16,7 @@ from rich.progress import (
 )
 
 from output_formatters import print_pretty, print_json, print_table
+from app_config import get_config
 from security import is_loopback_bind
 from utilities import open_daz_product
 import uvicorn
@@ -201,7 +202,8 @@ def morphs_index_command(args):
     from managers.morph_transpiler import index_library, embed_and_store_morphs, validate_library_root
     from managers.chroma_db_manager import ChromaDbManager
 
-    library_path = args.library_path or os.environ.get("MORPH_LIBRARY_PATH")
+    config = get_config()
+    library_path = args.library_path or config.morph_library_path
     if not library_path:
         print("Error: --library-path is required (or set MORPH_LIBRARY_PATH).", file=sys.stderr)
         sys.exit(1)
@@ -212,9 +214,9 @@ def morphs_index_command(args):
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
-    morph_db_path = os.environ.get("MORPH_INDEX_DB_PATH", "morph_index.db")
-    tmb_output_dir = os.environ.get("MORPH_CACHE_PATH", "morph_cache")
-    chroma_path = os.environ.get("CHROMA_PATH", "chroma_db")
+    morph_db_path = config.morph_index_db_path
+    tmb_output_dir = config.morph_cache_path
+    chroma_path = config.chroma_path
 
     _ensure_utf8_console_output()
 

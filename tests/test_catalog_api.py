@@ -61,28 +61,20 @@ class FakeAnalyzer:
 
 @pytest.fixture
 def tmp_settings(tmp_path, monkeypatch):
-    import catalog.model_config as model_config
     path = tmp_path / "settings.json"
     path.write_text('{"embedding_model": "fake/model-a"}', encoding="utf-8")
     monkeypatch.delenv("EMBEDDING_MODEL_OVERRIDE", raising=False)
-    monkeypatch.setattr(model_config, "SETTINGS_PATH", path)
+    monkeypatch.setenv("VAB_SETTINGS_PATH", str(path))
     return path
 
 
 def _patch_server(monkeypatch, tmp_path, catalog, gens, chroma_path, analyzer):
-    import server
+    """A production app (``.app``) over the given catalog; see tests/api_harness.py."""
+    from api_harness import ServerHarness
     from catalog.active_index import ActiveIndex
 
-    monkeypatch.setattr(server, "APP_MODE", "production")
-    monkeypatch.setattr(server, "catalog", catalog)
-    monkeypatch.setattr(server, "generations", gens)
-    monkeypatch.setattr(server, "active_index", ActiveIndex(gens, chroma_path))
-    monkeypatch.setattr(server, "job_store", JobStore(str(tmp_path / "api_jobs.db")))
-    monkeypatch.setattr(server, "spawn_worker", lambda store: None)
-    monkeypatch.setattr(server, "load_embedding_model", lambda: None)
-    monkeypatch.setattr(server, "daz_pg_analyzer", analyzer)
-    monkeypatch.setattr(server, "_cms_cache", None)
-    return server
+    return ServerHarness(catalog, gens, ActiveIndex(gens, chroma_path),
+                         JobStore(str(tmp_path / "api_jobs.db")), analyzer)
 
 
 @pytest.fixture
@@ -253,8 +245,9 @@ def test_query_sorts_paginates_and_thresholds(api):
     page2 = api.post("/api/v1/query", json={"prompt": "robe", "sort_by": "name",
                                              "sort_order": "ascending", "limit": 2, "offset": 2}).json()
     assert [h["id"] for h in page2["results"]] == ["3"]
-    none = api.post("/api/v1/query", json={"prompt": "robe", "score_threshold": -5}).json()
+    none = api.post("/api/v1/query", json={"prompt": "robe", "score_threshold": 0}).json()
     assert none["total_hits"] == 0 and none["results"] == []
+    assert api.post("/api/v1/query", json={"prompt": "robe", "score_threshold": -5}).status_code == 422
 
 
 # ── Browse ────────────────────────────────────────────────────────────────────
@@ -475,7 +468,7 @@ def test_status_caches_cms_snapshot(api, env, monkeypatch):
     assert api.get("/api/v1/status").json()["new_products"] == 1  # within the TTL
     api.get("/api/v1/health")
     assert env.analyzer.sku_reads == 1
-    monkeypatch.setattr(env.server, "_CMS_TTL_SECONDS", 0)
+    monkeypatch.setattr(env.server.services.status, "cms_ttl_seconds", 0)
     assert api.get("/api/v1/status").json()["new_products"] == 2
     assert env.analyzer.sku_reads == 2
 

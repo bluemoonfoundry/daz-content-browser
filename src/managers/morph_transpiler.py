@@ -116,7 +116,8 @@ def embed_and_store_morphs(morph_index_manager, chroma_manager, guids: list, on_
     if not guids:
         return 0, []
 
-    batch_size = int(os.getenv("BATCH_SIZE", "512"))
+    from app_config import get_config
+    batch_size = get_config().batch_size
     total = len(guids)
     embedded = 0
     failed_guids = []

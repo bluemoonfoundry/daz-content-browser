@@ -8,8 +8,6 @@ import aiohttp
 import requests
 from bs4 import BeautifulSoup
 
-from dotenv import load_dotenv
-load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +34,8 @@ def run_daz_script(script_name: str, script_args:list) -> bool:
     """
     try:
         # Find the DAZ Studio executable
-        daz_root = os.getenv("DAZ_STUDIO_EXE_PATH")
+        from app_config import get_config
+        daz_root = get_config().daz_studio_exe_path
         if not daz_root or not os.path.exists(daz_root):
             logger.error("DAZ_STUDIO_EXE_PATH is not set correctly in the environment")
             return False

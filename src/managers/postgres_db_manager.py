@@ -4,11 +4,9 @@ import asyncio
 import logging
 
 import aiohttp
-from dotenv import load_dotenv
 
 from utilities import fetch_json_from_url, fetch_html_content, async_fetch_json_from_url, async_fetch_html_content
 
-load_dotenv()
 
 logger = logging.getLogger(__name__)
 

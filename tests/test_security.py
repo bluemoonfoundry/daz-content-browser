@@ -2,9 +2,12 @@
 and credential redaction. Run against both the demo app and a production-like fixture
 (APP_MODE=production with fake managers)."""
 import json
+import types
 
 import pytest
 from fastapi.testclient import TestClient
+
+from api_harness import FakeDesktop, FakeScriptServer, ServerHarness, demo_app
 
 TOKEN = "test-token"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
@@ -25,46 +28,35 @@ PRIVILEGED = [
 ]
 
 
-@pytest.fixture(scope="module")
-def server_module():
-    import server
-    return server
+@pytest.fixture
+def app(request, tmp_path):
+    """The demo app, or the app of the ``mode`` a test asks for."""
+    if "mode" in request.fixturenames:
+        return request.getfixturevalue("mode").app
+    return demo_app(tmp_path)
 
 
 @pytest.fixture
-def anon(server_module):
-    return TestClient(server_module.app, base_url=BASE)
+def anon(app):
+    return TestClient(app, base_url=BASE)
 
 
 @pytest.fixture
-def authed(server_module):
-    return TestClient(server_module.app, base_url=BASE, headers=AUTH)
+def authed(app):
+    return TestClient(app, base_url=BASE, headers=AUTH)
 
 
 @pytest.fixture
-def settings_file(server_module, tmp_path, monkeypatch):
+def settings_file(tmp_path, monkeypatch):
     path = tmp_path / "settings.json"
     path.write_text(json.dumps({"cms_user": "dbuser", "cms_password": "s3cret"}), encoding="utf-8")
-    monkeypatch.setattr(server_module, "_SETTINGS_PATH", path)
+    monkeypatch.setenv("VAB_SETTINGS_PATH", str(path))
     return path
 
 
-class _FakeScriptServer:
+class _FakeScriptServer(FakeScriptServer):
     def __init__(self):
-        self.loaded = []
-
-    def is_available(self):
-        return True
-
-    def load_asset(self, path):
-        self.loaded.append(path)
-        return {"ok": True}
-
-    def get_content_directories(self, force=False):
-        return []
-
-    def browse_to_product(self, name):
-        raise AssertionError("must not be reached unauthenticated")
+        super().__init__(available=True)
 
 
 @pytest.fixture
@@ -82,22 +74,27 @@ def content_root(tmp_path):
 
 
 @pytest.fixture(params=["demo", "production"])
-def mode(request, server_module, content_root, monkeypatch, tmp_path):
-    """Runs a test in demo mode and in a production-like mode with fake managers."""
+def mode(request, content_root, monkeypatch, tmp_path):
+    """Runs a test in demo mode and in a production-like mode with fake adapters."""
     root, _, _ = content_root
-    monkeypatch.setattr(server_module, "_content_roots", lambda: [str(root)])
     fake = _FakeScriptServer()
+    desktop = FakeDesktop()
     if request.param == "production":
-        monkeypatch.setattr(server_module, "APP_MODE", "production")
-        monkeypatch.setattr(server_module, "daz_script_server", fake)
+        from catalog.active_index import ActiveIndex
+        from catalog.generations import GenerationStore
+        from catalog.store import CatalogStore
         from managers.job_store import JobStore
-        monkeypatch.setattr(server_module, "job_store", JobStore(str(tmp_path / "jobs.db")))
-        monkeypatch.setattr(server_module, "spawn_worker", lambda store: None)
-        launched = []
-        monkeypatch.setattr(server_module.subprocess, "Popen", lambda *a, **k: launched.append(a))
-        monkeypatch.setattr(server_module, "open_daz_product", lambda **k: True)
-        fake.launched = launched
-    return request.param, fake
+
+        db = str(tmp_path / "catalog.db")
+        gens = GenerationStore(db)
+        harness = ServerHarness(CatalogStore(db), gens, ActiveIndex(gens, str(tmp_path / "chroma")),
+                                JobStore(str(tmp_path / "jobs.db")), script_server=fake,
+                                desktop=desktop)
+        app = harness.app
+    else:
+        app = demo_app(tmp_path)
+    monkeypatch.setattr(app.state.services.content, "content_roots", lambda: [str(root)])
+    return types.SimpleNamespace(name=request.param, fake=fake, desktop=desktop, app=app)
 
 
 # ── Authentication ─────────────────────────────────────────────────────────────
@@ -106,14 +103,13 @@ def mode(request, server_module, content_root, monkeypatch, tmp_path):
 def test_privileged_endpoints_reject_missing_token(anon, mode, settings_file, method, path, body):
     r = anon.request(method, path, json=body)
     assert r.status_code == 401, (path, r.text)
-    _, fake = mode
-    assert fake.loaded == []
-    assert getattr(fake, "launched", []) == []
+    assert mode.fake.loaded == []
+    assert mode.desktop.launched == [] and mode.desktop.opened == []
 
 
 @pytest.mark.parametrize("method,path,body", PRIVILEGED)
-def test_privileged_endpoints_reject_wrong_token(server_module, mode, settings_file, method, path, body):
-    c = TestClient(server_module.app, base_url=BASE, headers={"Authorization": "Bearer nope"})
+def test_privileged_endpoints_reject_wrong_token(app, mode, settings_file, method, path, body):
+    c = TestClient(app, base_url=BASE, headers={"Authorization": "Bearer nope"})
     assert c.request(method, path, json=body).status_code == 401
 
 
@@ -137,8 +133,8 @@ def test_read_endpoints_can_require_token(anon, authed, monkeypatch):
 
 # ── Browser session cookie ─────────────────────────────────────────────────────
 
-def test_session_cookie_authenticates_ui(server_module, settings_file):
-    c = TestClient(server_module.app, base_url=BASE)
+def test_session_cookie_authenticates_ui(app, settings_file):
+    c = TestClient(app, base_url=BASE)
     r = c.post("/api/v1/auth/session", headers={"Origin": "http://127.0.0.1"})
     assert r.status_code == 200
     assert TOKEN not in r.text
@@ -159,8 +155,8 @@ def test_session_rejects_foreign_origin(anon):
 
 # ── Host / Origin / CORS ───────────────────────────────────────────────────────
 
-def test_dns_rebinding_host_rejected(server_module):
-    c = TestClient(server_module.app, base_url="http://evil.example", headers=AUTH)
+def test_dns_rebinding_host_rejected(app):
+    c = TestClient(app, base_url="http://evil.example", headers=AUTH)
     assert c.get("/api/v1/status").status_code == 403
 
 
@@ -208,21 +204,19 @@ def test_thumbnail_outside_root_rejected(authed, mode, content_root, which):
 
 def test_scene_load_scoped_to_roots(authed, mode, content_root):
     _, asset, outside = content_root
-    _, fake = mode
     assert authed.post("/api/v1/scene/load", json={"path": str(outside / "passwords.duf")}).status_code == 403
-    assert fake.loaded == []
+    assert mode.fake.loaded == []
     assert authed.post("/api/v1/scene/load", json={"path": str(asset)}).status_code == 200
 
 
 def test_reveal_scoped_to_roots(authed, mode, content_root):
-    name, fake = mode
-    if name == "demo":
+    if mode.name == "demo":
         pytest.skip("reveal launches the real file explorer outside the production fixture")
     _, asset, outside = content_root
     assert authed.post("/api/v1/files/reveal", json={"path": str(outside / "passwords.duf")}).status_code == 403
-    assert fake.launched == []
+    assert mode.desktop.launched == []
     assert authed.post("/api/v1/files/reveal", json={"path": str(asset)}).status_code == 200
-    assert len(fake.launched) == 1
+    assert len(mode.desktop.launched) == 1
 
 
 def test_reveal_outside_root_rejected_in_demo(authed, mode, content_root):

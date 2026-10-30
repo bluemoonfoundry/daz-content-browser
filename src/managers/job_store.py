@@ -10,7 +10,6 @@ process notices first: re-queued while it has attempts left, otherwise failed.
 
 import json
 import logging
-import os
 import sqlite3
 import time
 import uuid
@@ -29,8 +28,9 @@ CANCELLED = "cancelled"
 ACTIVE_STATUSES = (QUEUED, RUNNING)
 DONE_STATUSES = (SUCCEEDED, FAILED, CANCELLED)
 
-DEFAULT_LEASE_SECONDS = float(os.getenv("VAB_JOB_LEASE_SECONDS", "60"))
-DEFAULT_MAX_ATTEMPTS = int(os.getenv("VAB_JOB_MAX_ATTEMPTS", "3"))
+# None: from the configuration (VAB_JOB_LEASE_SECONDS / VAB_JOB_MAX_ATTEMPTS).
+DEFAULT_LEASE_SECONDS: Optional[float] = None
+DEFAULT_MAX_ATTEMPTS: Optional[int] = None
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS index_jobs (
@@ -85,11 +85,13 @@ def public_view(job: Optional[dict]) -> Optional[dict]:
 class JobStore:
     """Persisted job table. Safe to share between processes; each call opens its own connection."""
 
-    def __init__(self, db_path: str, lease_seconds: float = DEFAULT_LEASE_SECONDS,
-                 max_attempts: int = DEFAULT_MAX_ATTEMPTS):
+    def __init__(self, db_path: str, lease_seconds: Optional[float] = DEFAULT_LEASE_SECONDS,
+                 max_attempts: Optional[int] = DEFAULT_MAX_ATTEMPTS):
+        from app_config import get_config
+        config = get_config()
         self.db_path = db_path
-        self.lease_seconds = lease_seconds
-        self.max_attempts = max_attempts
+        self.lease_seconds = config.job_lease_seconds if lease_seconds is None else lease_seconds
+        self.max_attempts = config.job_max_attempts if max_attempts is None else max_attempts
         self._schema_ready = False
 
     # ── Connection ────────────────────────────────────────────────────────────

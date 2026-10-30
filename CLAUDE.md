@@ -96,7 +96,22 @@ vab morphs index --library-path "C:/path/to/DAZ/library" --force
 **Data flow:** PostgreSQL (DAZ CMS) → SQLite catalog (per-source records, asset view, lookup tables,
 generations) → one ChromaDB collection per index generation
 
-- `src/server.py` — FastAPI app; all HTTP endpoints; lifespan preloads the embedding model
+- `src/app_config.py` — typed `AppConfig`, loaded through `get_config()`: defaults → `.env` →
+  environment → `settings.json` (`VAB_SETTINGS_PATH`; editable settings only) → `--model`.
+  Cached on the settings.json stamp and the env snapshot. `EDITABLE_SETTINGS` says when each
+  saved setting applies (`immediate` / `next_index_job` / `restart`); everything else is
+  environment-only and needs a restart. Read config through it, never `os.getenv`
+- `src/server.py` — ASGI entry (`server:app`) only; the app is `src/api/`: `app.py`
+  (`create_app(services)`, lifespan, error mapping), `schemas.py` (bounded request models and
+  the response models = the OpenAPI contract), `routers/` (thin; no logic)
+- `src/services/` — domain services the routers call through FastAPI dependencies
+  (`request.app.state.services`): `products`, `search` (shared by /search and /query),
+  `status`, `jobs`, `settings`, `content` (roots, assets, DAZ Studio, file actions);
+  `adapters.py` (`CmsGateway`/`ScriptServerGateway` follow the config, `DesktopActions`);
+  `container.py` wires them (`build_services`, `build_demo_services`, `default_services`).
+  Services raise `services.errors` (mapped to HTTP), never `HTTPException`
+- `src/demo_data.py` — demo mode is an in-memory catalog/index with the CatalogStore/ActiveIndex
+  interface, so demo responses go through the same services and shapes
 - `src/embedding_utils.py` — ONNX Runtime inference (BAAI/bge-large-en-v1.5, 1024-dim);
   exports model to `models/bge-large-en-v1.5/` on first run, loads from cache thereafter
 - `src/managers/chroma_db_manager.py` — ChromaDB wrapper; cosine-similarity search;
@@ -114,10 +129,11 @@ generations) → one ChromaDB collection per index generation
   generations), `active_index.py` (search against the active generation), `status.py`
   (reconciliation-backed status/health, rebuild hints), `model_config.py`. Survives
   ChromaDB resets
-- `src/managers/managers.py` — module-level singletons (`catalog`, `generations`, `builder`,
-  `active_index`, `job_store`, ...) imported everywhere; none of them
-  touch ChromaDB at import time (`ChromaDbManager` opens lazily), so a broken store never
-  blocks startup
+- `src/managers/managers.py` — process-wide adapters built from the config (`catalog`,
+  `generations`, `builder`, `active_index`, `job_store`, `cms`, `script_server`, `desktop`),
+  used by the worker, the CLI and `default_services()`; none of them touch a database at import
+  time (`ChromaDbManager` opens lazily, the CMS connects on first `cms.get()`), so a broken
+  store never blocks startup. Tests build apps with `tests/api_harness.py`, not by patching it
 - `src/managers/job_store.py` — SQLite job table (`JOBS_DB_PATH`, default `index_jobs.db`);
   a partial unique index allows one queued/running job across all processes; workers hold
   a heartbeat lease, and lapsed leases are re-queued (resuming incrementally) or failed
@@ -186,8 +202,16 @@ vab morphs index --library-path "C:/path/to/DAZ/library"   # non --force: self-h
 **Search:** The server returns up to `max_results` items in a single response.
 Pagination is client-side — callers slice the results array themselves.
 
-**Settings:** Runtime config is layered: `.env` defaults → `settings.json` overrides →
-`GET /api/v1/settings` / `PUT /api/v1/settings` to read/write at runtime.
+**Settings:** Runtime config is layered (see `src/app_config.py`): defaults → `.env` →
+environment → `settings.json` → `--model`. `GET`/`PUT /api/v1/settings` read/write the
+editable ones; the PUT response says which changes were applied immediately (CMS connection,
+plugin URL), which apply to the next index job (`embedding_model`) and which were ignored
+(deprecated `query_model`, `cms_schema`, `daz_script_server_enabled`).
+
+**API contract:** every endpoint declares a response model in `src/api/schemas.py`, and every
+request size/count/score is bounded there; `tests/test_api_contract.py` validates the OpenAPI
+examples against the models and checks the bounds. `/search` and `/query` share
+`services.search.SearchService` (same exact filters including `is_installed`, same relevance).
 
 **Demo mode:** `APP_MODE=demo` (or `--demo` flag) serves mock data; no database required.
 Used by all tests via the `client` fixture in `tests/conftest.py`.

@@ -17,6 +17,8 @@ os.environ["SQLITE_TABLE_NAME"] = "products"
 os.environ["CHROMA_PATH"] = os.path.join(_TMP, "chroma")
 os.environ["CHROMA_COLLECTION"] = "test_collection"
 os.environ["JOBS_DB_PATH"] = os.path.join(_TMP, "index_jobs.db")
+# Never read or write the repo's settings.json (it could point at a real CMS)
+os.environ["VAB_SETTINGS_PATH"] = os.path.join(_TMP, "settings.json")
 # Blank (not unset) so load_dotenv() can't fill them in from .env: tests must never
 # reach a real DAZ CMS PostgreSQL, running or not
 for _key in ("DB_NAME", "DB_HOST"):

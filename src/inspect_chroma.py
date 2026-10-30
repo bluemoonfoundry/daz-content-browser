@@ -1,19 +1,13 @@
 # src/inspect_chroma.py
 
-import os
 import sys
 import chromadb
 
-from dotenv import load_dotenv
+from app_config import get_config
 from managers.chroma_db_manager import ChromaDbManager
 
-load_dotenv()
-
 # Inspects the pre-generations collection; generation collections are named by the catalog.
-chroma_db_manager = ChromaDbManager(
-    os.environ.get("CHROMA_PATH", "chroma_db"),
-    os.environ.get("CHROMA_COLLECTION", "daz_products2"),
-)
+chroma_db_manager = ChromaDbManager(get_config().chroma_path, get_config().chroma_collection)
 
 def document_exists(doc_id:str) -> bool:
     """ Checks if a document with the given ID exists in the ChromaDB collection.

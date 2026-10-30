@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import index_worker
+from api_harness import ServerHarness, demo_app
 from index_worker import JobContext, run_job, spawn_worker
 from managers.chroma_db_manager import ChromaDbManager, VectorStoreUnavailable
 from managers.job_store import CANCELLED, FAILED, QUEUED, RUNNING, SUCCEEDED, JobConflict, JobStore
@@ -303,7 +304,6 @@ def test_repair_quarantines_an_unopenable_store(broken_chroma, tmp_path):
 
 @pytest.fixture
 def prod(monkeypatch, tmp_path, broken_chroma, fake_embedder):
-    import server
     from catalog.active_index import ActiveIndex
     from catalog.documents import DOC_FORMAT_VERSION
     from catalog.generations import GenerationStore
@@ -318,16 +318,10 @@ def prod(monkeypatch, tmp_path, broken_chroma, fake_embedder):
     gens.create_active_adopted("daz_products2", "fake/model-a", 8, DOC_FORMAT_VERSION, LATEST_VERSION)
 
     spawned = []
-    monkeypatch.setattr(server, "APP_MODE", "production")
-    monkeypatch.setattr(server, "catalog", catalog)
-    monkeypatch.setattr(server, "generations", gens)
-    monkeypatch.setattr(server, "active_index", ActiveIndex(gens, broken_chroma.chroma_db_path))
-    monkeypatch.setattr(server, "job_store", JobStore(str(tmp_path / "api_jobs.db")))
-    monkeypatch.setattr(server, "spawn_worker", lambda store: spawned.append(store))
-    monkeypatch.setattr(server, "load_embedding_model", lambda: None)
-    # Never reach a real DAZ CMS that .env may configure.
-    monkeypatch.setattr(server, "daz_pg_analyzer", None)
-    monkeypatch.setattr(server, "_cms_cache", None)
+    # No DAZ CMS: never reach a real one that .env may configure.
+    server = ServerHarness(catalog, gens, ActiveIndex(gens, broken_chroma.chroma_db_path),
+                           JobStore(str(tmp_path / "api_jobs.db")))
+    server.spawn_worker = lambda store: spawned.append(store)
     server.spawned = spawned
     return server
 
@@ -404,7 +398,6 @@ def test_api_update_spawn_failure_does_not_wedge_the_queue(prod, monkeypatch):
     assert client.post("/api/v1/update", json={}).status_code == 202
 
 
-def test_update_status_unknown_task_404():
-    import server
-    client = TestClient(server.app, base_url=BASE, headers=AUTH)
+def test_update_status_unknown_task_404(tmp_path):
+    client = TestClient(demo_app(tmp_path), base_url=BASE, headers=AUTH)
     assert client.get("/api/v1/update/status/nope").status_code == 404

@@ -1,11 +1,12 @@
 import logging
-import os
 from datetime import date, datetime
+from typing import Optional
+
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
-from dotenv import load_dotenv
-load_dotenv()
+
+from app_config import CmsConfig, get_config
 
 logger = logging.getLogger(__name__)
 
@@ -57,33 +58,23 @@ class DazDBAnalyzer:
     QUERY_GROUPING = "GROUP BY p.id, p.name, p.artists, p.token, p.last_update, p.date_installed ORDER BY p.name"
 
 
-    def __init__(self):        
-        """Initializes the DazDBAnalyzer with database configuration from environment variables.
-        Expects the following environment variables to be set:
-            - DB_NAME
-            - DB_USER
-            - DB_HOST
-            - DB_PORT
-            - DB_PASS  (optional — DAZ Studio's default dzcms account has no password)
-            - BATCH_SIZE (optional, defaults to 512)
-        """
-        required = ("DB_NAME", "DB_USER", "DB_HOST", "DB_PORT")
-        missing = [k for k in required if not os.environ.get(k)]
+    def __init__(self, cms: Optional[CmsConfig] = None):
+        """Opens a connection pool to the DAZ CMS described by ``cms`` (default: the
+        configured one; see app_config). DAZ Studio's default dzcms account has no password.
+        Raises EnvironmentError when the connection is not configured, psycopg2.Error when
+        the CMS can't be reached."""
+        config = get_config()
+        cms = cms or config.cms
+        missing = cms.missing()
         if missing:
             raise EnvironmentError(
-                f"DazDBAnalyzer: missing required environment variable(s): {', '.join(missing)}"
-            )
-
-        db_config = {
-            "dbname":   os.environ["DB_NAME"],
-            "user":     os.environ["DB_USER"],
-            "password": os.environ.get("DB_PASS", ""),
-            "host":     os.environ["DB_HOST"],
-            "port":     os.environ["DB_PORT"],
-        }
-        pool_max = int(os.getenv("DB_POOL_MAX", "5"))
-        self._pool = psycopg2.pool.ThreadedConnectionPool(1, pool_max, **db_config)
-        self.batch_size = int(os.getenv("BATCH_SIZE", 512))
+                f"DazDBAnalyzer: the DAZ CMS connection is not configured (missing: "
+                f"{', '.join(missing)}). Set it in Settings or .env (DB_HOST, DB_NAME, DB_USER).")
+        self.cms = cms
+        self._pool = psycopg2.pool.ThreadedConnectionPool(
+            1, cms.pool_max, dbname=cms.db, user=cms.user, password=cms.password,
+            host=cms.host, port=cms.port, connect_timeout=5)
+        self.batch_size = config.batch_size
 
     def _execute_query(self, sql, params=None):
         """Executes a SQL query and returns the results as a list of dictionaries.

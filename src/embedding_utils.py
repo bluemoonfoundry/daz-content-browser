@@ -3,14 +3,12 @@ import os
 from pathlib import Path
 
 import numpy as np
-from dotenv import load_dotenv
-load_dotenv()
-
+from app_config import get_config
 from catalog.model_config import configured_model_id
 
 logger = logging.getLogger(__name__)
 
-_INFERENCE_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
+_INFERENCE_BATCH_SIZE = get_config().embedding_batch_size
 _PROFILE_PROVIDERS = os.getenv("EMBEDDING_PROFILE_PROVIDERS", "") == "1"
 
 _MODELS_ROOT = Path(__file__).parent.parent / "models"
@@ -30,7 +28,7 @@ class ModelUnavailable(RuntimeError):
 
 def model_dir(model_id: str) -> Path:
     """Directory holding a model's ONNX export. EMBEDDING_MODEL_DIR applies only to the configured model."""
-    env_dir = os.getenv("EMBEDDING_MODEL_DIR", "")
+    env_dir = get_config().embedding_model_dir
     if env_dir and model_id == configured_model_id():
         return Path(env_dir)
     return _MODELS_ROOT / model_id.split("/")[-1]

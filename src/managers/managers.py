@@ -1,18 +1,18 @@
-import logging
+"""Process-wide adapters, built from the configuration (app_config.get_config()).
+
+Shared by the API (through services.container.default_services), the index worker and the
+CLI. Nothing here touches a database at import: the catalog migrates lazily, Chroma opens
+lazily, and the DAZ CMS is connected on first use (CmsGateway).
+"""
 import os
-import psycopg2
-from .daz_db_analyzer import DazDBAnalyzer
-from .job_store import JobStore
-from .daz_script_server import DazScriptServerClient
+
+from app_config import get_config
 from catalog.active_index import ActiveIndex
 from catalog.builder import GenerationBuilder
 from catalog.generations import GenerationStore
 from catalog.store import CatalogStore
-
-from dotenv import load_dotenv
-load_dotenv()
-
-logger = logging.getLogger(__name__)
+from services.adapters import CmsGateway, DesktopActions, ScriptServerGateway
+from .job_store import JobStore
 
 
 def _open_catalog(db_path, legacy_table) -> CatalogStore:
@@ -29,12 +29,12 @@ def _open_catalog(db_path, legacy_table) -> CatalogStore:
     return CatalogStore(db_path, legacy_table=legacy_table, lazy=True)
 
 
-catalog = _open_catalog(os.environ.get("SQLITE_DB_PATH"), os.environ.get("SQLITE_TABLE_NAME"))
+_config = get_config()
+
+catalog = _open_catalog(_config.sqlite_db_path, _config.sqlite_table_name)
 generations = GenerationStore(catalog.db_path, ready=catalog.ensure_migrated)
-builder = GenerationBuilder(
-    catalog, generations, os.environ.get("CHROMA_PATH", "chroma_db"),
-    legacy_collection=os.environ.get("CHROMA_COLLECTION", "daz_products2"),
-)
+builder = GenerationBuilder(catalog, generations, _config.chroma_path,
+                            legacy_collection=_config.chroma_collection)
 
 
 def _adopt_legacy():
@@ -46,18 +46,11 @@ def _adopt_legacy():
 # promotion by the worker process is picked up. Opens lazily, like every Chroma handle.
 # While no generation exists, the pre-generations collection is adopted (server startup,
 # or lazily on first use), so an upgraded install serves search before any index job.
-active_index = ActiveIndex(generations, os.environ.get("CHROMA_PATH", "chroma_db"),
-                           adopt=_adopt_legacy)
+active_index = ActiveIndex(generations, _config.chroma_path, adopt=_adopt_legacy)
 
-job_store = JobStore(os.path.abspath(os.environ.get("JOBS_DB_PATH", "index_jobs.db")))
+job_store = JobStore(os.path.abspath(_config.jobs_db_path))
 
-try:
-    daz_pg_analyzer = DazDBAnalyzer()
-except (EnvironmentError, psycopg2.Error) as e:
-    # Missing config, or the DAZ CMS isn't running — the server still starts without it
-    logger.warning(f"PostgreSQL analyzer not available: {e}")
-    daz_pg_analyzer = None
-
-daz_script_server = DazScriptServerClient(
-    base_url=os.getenv("DAZ_SCRIPT_SERVER_URL", "http://127.0.0.1:18811")
-)
+# The DAZ CMS (PostgreSQL); follows the saved connection settings, None while unavailable.
+cms = CmsGateway()
+script_server = ScriptServerGateway()
+desktop = DesktopActions()

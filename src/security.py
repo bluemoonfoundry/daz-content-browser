@@ -33,23 +33,20 @@ _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
 _DEFAULT_UI_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
 
-def _env_list(name: str) -> list[str]:
-    return [x.strip() for x in os.getenv(name, "").split(",") if x.strip()]
-
-
-def _env_flag(name: str) -> bool:
-    return os.getenv(name, "").strip().lower() in ("1", "true", "yes")
+def _config():
+    from app_config import get_config
+    return get_config()
 
 
 # ── Token ──────────────────────────────────────────────────────────────────────
 
 def token_file_path() -> Path:
-    override = os.getenv("VAB_API_TOKEN_FILE")
+    override = _config().api_token_file
     return Path(override) if override else Path.home() / ".daz3d" / "vab_api_token.txt"
 
 
 def _load_or_create_token() -> str:
-    env_token = os.getenv("VAB_API_TOKEN", "").strip()
+    env_token = (_config().api_token or "").strip()
     if env_token:
         return env_token
     path = token_file_path()
@@ -110,18 +107,18 @@ def require_read_access(request: Request) -> None:
     Host/Origin guard, so browsers on other sites can neither read them (CORS) nor reach
     them through DNS rebinding. Set VAB_REQUIRE_TOKEN_FOR_READS=1 to lock them down.
     """
-    if _env_flag("VAB_REQUIRE_TOKEN_FOR_READS"):
+    if _config().require_token_for_reads:
         require_token(request)
 
 
 # ── Host / Origin ──────────────────────────────────────────────────────────────
 
 def allowed_hosts() -> set[str]:
-    return _LOOPBACK_HOSTS | {h.lower() for h in _env_list("VAB_ALLOWED_HOSTS")}
+    return _LOOPBACK_HOSTS | {h.lower() for h in _config().allowed_hosts}
 
 
 def allowed_origins() -> list[str]:
-    return _env_list("VAB_ALLOWED_ORIGINS") or list(_DEFAULT_UI_ORIGINS)
+    return list(_config().allowed_origins) or list(_DEFAULT_UI_ORIGINS)
 
 
 def _host_only(netloc: str) -> str:

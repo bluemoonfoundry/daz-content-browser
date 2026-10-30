@@ -376,7 +376,7 @@ Semantic search with optional filters. Primary search endpoint for the UI.
 }
 ```
 
-All filter fields are optional. `max_results` caps how many results the server returns (default 500); pagination is handled client-side. `min_relevance` filters out results below a score threshold (0.0 = no filtering).
+All filter fields are optional and exact-match; each takes one value or a list (OR within a list, AND across filters), and `tags` is accepted too. `is_installed` filters on whether the product is currently in the DAZ CMS. `max_results` caps how many results the server returns (1–1000, default 500); pagination is handled client-side. `min_relevance` (0–1, relevance = 1 − cosine distance) drops results below it (0.0 = no filtering). `query` is 1–1000 characters.
 
 #### `POST /api/v1/query`
 
@@ -392,13 +392,15 @@ Full-featured semantic search with multi-value filters. Designed for programmati
   "artists": ["Daz Originals"],
   "categories": ["Clothing"],
   "compatible_figures": ["Genesis 9"],
+  "is_installed": true,
   "score_threshold": 1.0,
+  "min_relevance": 0.25,
   "sort_by": "relevance",
   "sort_order": "descending"
 }
 ```
 
-All filter arrays are optional. `score_threshold` is the maximum distance score (lower = more similar; 1.0 returns all results).
+`/query` runs the same search as `/search` (same exact filters, including `is_installed`, and the same relevance) over a fixed pool of the 500 nearest products, paged with `offset` (0–500) and `limit` (1–100) so `total_hits` stays stable across pages. Filter arrays hold up to 50 values. `score_threshold` (0–2, default 1.0) is the legacy cut as a maximum cosine distance, i.e. `min_relevance = 1 - score_threshold`; when both are given the stricter applies. `sort_by` is `relevance` or a metadata field (`name`, `artist`, `category`, `sku`, `asset_count`, ...).
 
 ---
 
@@ -424,13 +426,13 @@ All distinct filter values present in the index. Use this to populate filter UI 
 
 **🔒 token**
 
-Returns current configuration (environment + `settings.json` overlay). The CMS password is never returned; `cms_password_set` reports whether one is stored.
+Returns the effective settings (defaults → `.env` → environment → `settings.json`; see `src/app_config.py`). The CMS password is never returned; `cms_password_set` reports whether one is configured. `applies` says when a saved change takes effect: `immediate` (CMS connection, plugin URL), `next_index_job` (`embedding_model`: `/status` then reports the rebuild it needs) or `restart`. `query_model` is read-only: the active index's model, which every query embeds with.
 
 #### `PUT /api/v1/settings`
 
 **🔒 token**
 
-Saves settings to `settings.json`. Only fields included in the request body are updated; omitted fields are left unchanged. `cms_password` is write-only: an empty string keeps the stored password. The response has the same shape as `GET`.
+Saves settings to `settings.json`. Only fields included in the request body are updated; omitted fields are left unchanged. `cms_password` is write-only: an empty string keeps the stored password. The response is the `GET` shape plus `changed`, `applied`, `applies_on_next_index_job`, `restart_required` and `ignored`. `query_model`, `cms_schema` and `daz_script_server_enabled` are deprecated: accepted for older clients, ignored, and listed in `ignored`.
 
 ```json
 // Request body (all fields optional)
@@ -440,11 +442,8 @@ Saves settings to `settings.json`. Only fields included in the request body are 
   "cms_db": "Content",
   "cms_user": "dzcms",
   "cms_password": "secret",
-  "cms_schema": "dzcontent",
   "embedding_model": "BAAI/bge-large-en-v1.5",
-  "query_model": "BAAI/bge-large-en-v1.5",
-  "daz_script_server_url": "http://localhost:18811",
-  "daz_script_server_enabled": true
+  "daz_script_server_url": "http://localhost:18811"
 }
 ```
 
@@ -452,7 +451,7 @@ Saves settings to `settings.json`. Only fields included in the request body are 
 
 **🔒 token**
 
-Test a PostgreSQL connection with the given credentials. Accepts the same body as `PUT /api/v1/settings`.
+Test a DAZ CMS connection: the saved settings overlaid with the given ones (a blank password keeps the saved one). Accepts the same body as `PUT /api/v1/settings`.
 
 ```json
 // Response

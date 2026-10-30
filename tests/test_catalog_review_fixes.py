@@ -19,6 +19,7 @@ from catalog.store import CMS_SOURCE, CatalogStore
 from catalog_fakes import FakeScraper, cms_row, fake_embed
 from managers.chroma_db_manager import ChromaDbManager
 from managers.job_store import FAILED, SUCCEEDED, JobStore
+from services.adapters import CmsGateway
 from test_catalog_api import AUTH, BASE, FIGS, PRODUCTS, FakeAnalyzer, _add, _patch_server
 from test_catalog_api import tmp_settings  # noqa: F401  (fixture)
 
@@ -197,8 +198,8 @@ def job_env(tmp_path, monkeypatch, fake_embedder):
     monkeypatch.setattr(m, "catalog", catalog)
     monkeypatch.setattr(m, "generations", gens)
     monkeypatch.setattr(m, "builder", builder)
-    monkeypatch.setattr(m, "daz_pg_analyzer",
-                        types.SimpleNamespace(get_all_products=lambda: list(ns.cms)))
+    monkeypatch.setattr(m, "cms", CmsGateway.fixed(
+        types.SimpleNamespace(get_all_products=lambda: list(ns.cms))))
     monkeypatch.setattr(index_worker, "_scraper", lambda ctx: FakeScraper())
     monkeypatch.setattr(index_worker, "_figure_names", lambda: FIGS)
     ns.run = lambda kind, params=None: index_worker.run_inline(ns.store, kind, params or {})

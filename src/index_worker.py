@@ -114,7 +114,8 @@ class _Scraper:
 
     def __init__(self, ctx: JobContext):
         self.ctx = ctx
-        self.concurrency = int(os.getenv("ETL_SCRAPE_CONCURRENCY", "10"))
+        from app_config import get_config
+        self.concurrency = get_config().scrape_concurrency
         self.total: Optional[int] = None
         self.done = 0
 
@@ -173,10 +174,11 @@ def _reconcile(ctx: JobContext, **kwargs):
     from catalog.reconcile import reconcile_daz
 
     m = _managers()
-    if m.daz_pg_analyzer is None:
+    analyzer = m.cms.get()
+    if analyzer is None:
         raise RuntimeError(_CMS_UNAVAILABLE)
     ctx.report("etl", "Reading the DAZ CMS product list…")
-    cms_rows = m.daz_pg_analyzer.get_all_products()
+    cms_rows = analyzer.get_all_products()
     scraper = _scraper(ctx)
     return reconcile_daz(m.catalog, cms_rows, scraper, _figure_names(),
                          cancel_check=ctx.cancelled,
@@ -231,7 +233,7 @@ def _rebuild(ctx: JobContext, model_id: str, refetch: bool) -> str:
     from catalog.builder import RebuildIncomplete
 
     m = _managers()
-    if refetch and m.daz_pg_analyzer is None:
+    if refetch and m.cms.get() is None:
         raise RuntimeError(_CMS_UNAVAILABLE)  # before creating a generation it can't finish
     ctx.report("rebuild", f"Preparing a new index generation for {model_id}…")
     _ensure_model(model_id)

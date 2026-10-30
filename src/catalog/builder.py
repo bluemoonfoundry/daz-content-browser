@@ -9,7 +9,6 @@ without re-embedding: the legacy collection becomes active generation 1 and its 
 """
 
 import logging
-import os
 import sqlite3
 from typing import Callable, Optional
 
@@ -40,7 +39,8 @@ class AdoptionFailed(Exception):
 
 
 def _batch_size_default() -> int:
-    return int(os.getenv("BATCH_SIZE", "512"))
+    from app_config import get_config
+    return get_config().batch_size
 
 
 def _metadata(row: dict, gen_id: int) -> dict:

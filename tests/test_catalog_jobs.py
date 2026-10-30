@@ -10,6 +10,7 @@ from catalog.store import WEB_SOURCE, CatalogStore
 from catalog_fakes import FIGS, FakeScraper, cms_row, fake_embed, web_payload
 from managers.chroma_db_manager import ChromaDbManager
 from managers.job_store import CANCELLED, FAILED, SUCCEEDED, JobStore
+from services.adapters import CmsGateway
 
 SKUS = ["A1", "B2", "C3", "D4"]
 
@@ -37,7 +38,7 @@ def job_env(tmp_path, monkeypatch, fake_embedder):
     monkeypatch.setattr(m, "catalog", catalog)
     monkeypatch.setattr(m, "generations", gens)
     monkeypatch.setattr(m, "builder", builder)
-    monkeypatch.setattr(m, "daz_pg_analyzer", analyzer)
+    monkeypatch.setattr(m, "cms", CmsGateway.fixed(analyzer))
     monkeypatch.setattr(index_worker, "_scraper", lambda ctx: ns.scraper)
     monkeypatch.setattr(index_worker, "_figure_names", lambda: FIGS)
 
@@ -104,7 +105,7 @@ def test_index_job_phases(job_env):
 
 def test_index_job_without_cms_fails_unless_embed_only(job_env, monkeypatch):
     from managers import managers as m
-    monkeypatch.setattr(m, "daz_pg_analyzer", None)
+    monkeypatch.setattr(m, "cms", CmsGateway.fixed(None))
     done = job_env.run("index")
     assert done["status"] == FAILED and "DAZ CMS PostgreSQL is not available" in done["error"]
     assert job_env.run("index", {"phase": "embed"})["status"] == SUCCEEDED
@@ -278,7 +279,7 @@ def test_repair_quarantines_an_unopenable_store(job_env, tmp_path):
 def test_refetch_rebuild_without_cms_fails_before_starting(job_env, monkeypatch):
     from managers import managers as m
     job_env.run("index")
-    monkeypatch.setattr(m, "daz_pg_analyzer", None)
+    monkeypatch.setattr(m, "cms", CmsGateway.fixed(None))
     done = job_env.run("rebuild", {"refetch": True})
     assert done["status"] == FAILED and "DAZ CMS PostgreSQL is not available" in done["error"]
     assert job_env.gens.building() is None
