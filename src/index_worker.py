@@ -104,18 +104,49 @@ def _figure_names() -> list:
     return load_figure_names()
 
 
+class _Scraper:
+    """The store scraper the reconciler calls per batch of SKUs.
+
+    Reports progress across batches: ``plan(n)`` (called by the reconciler with the number
+    of SKUs it will scrape) sets the total, and each batch continues from where the last
+    one ended instead of restarting at 0.
+    """
+
+    def __init__(self, ctx: JobContext):
+        self.ctx = ctx
+        self.concurrency = int(os.getenv("ETL_SCRAPE_CONCURRENCY", "10"))
+        self.total: Optional[int] = None
+        self.done = 0
+
+    def plan(self, total: int) -> None:
+        self.total, self.done = total, 0
+
+    def __call__(self, skus: list) -> dict:
+        import managers.postgres_db_manager as pdm
+
+        base = self.done
+        total = max(self.total or 0, base + len(skus))
+
+        def progress(stage, current, batch_total, detail=""):
+            self.ctx.on_progress("etl", base + current, total, str(detail))
+        try:
+            return pdm.scrape_many(skus, concurrency=self.concurrency, on_progress=progress)
+        finally:
+            self.done = base + len(skus)
+
+
 def _scraper(ctx: JobContext) -> Callable[[list], dict]:
-    """The store scraper the reconciler calls per batch of SKUs."""
-    from managers.postgres_db_manager import scrape_many
+    return _Scraper(ctx)
 
-    concurrency = int(os.getenv("ETL_SCRAPE_CONCURRENCY", "10"))
 
-    def progress(stage, current, total, detail=""):
-        ctx.on_progress("etl", current, total, str(detail))
+def _ensure_model(model_id: str) -> None:
+    """Before a job builds or embeds with ``model_id``: export it if its files are missing
+    (not in a frozen build, which raises ModelUnavailable with the export hint). Request
+    paths never do this."""
+    import embedding_utils
 
-    def scrape(skus: list) -> dict:
-        return scrape_many(skus, concurrency=concurrency, on_progress=progress)
-    return scrape
+    if not embedding_utils.model_available(model_id):
+        embedding_utils.load_embedding_model(model_id, allow_export=True)
 
 
 def _check_migrated() -> None:
@@ -125,7 +156,11 @@ def _check_migrated() -> None:
 
 
 def _prepare() -> None:
-    """Refuses to run on an unmigrated catalog; adopts a legacy index; drops retired ones."""
+    """Refuses to run on an unmigrated catalog; adopts a legacy index; drops retired ones.
+
+    A legacy index that exists but can't be adopted raises AdoptionFailed (failing the
+    job) instead of letting the job build a new index over it.
+    """
     from catalog.model_config import configured_model_id
 
     _check_migrated()
@@ -142,8 +177,10 @@ def _reconcile(ctx: JobContext, **kwargs):
         raise RuntimeError(_CMS_UNAVAILABLE)
     ctx.report("etl", "Reading the DAZ CMS product list…")
     cms_rows = m.daz_pg_analyzer.get_all_products()
-    return reconcile_daz(m.catalog, cms_rows, _scraper(ctx), _figure_names(),
-                         cancel_check=ctx.cancelled, **kwargs)
+    scraper = _scraper(ctx)
+    return reconcile_daz(m.catalog, cms_rows, scraper, _figure_names(),
+                         cancel_check=ctx.cancelled,
+                         on_scrape_plan=getattr(scraper, "plan", None), **kwargs)
 
 
 def _reconcile_summary(r) -> str:
@@ -197,6 +234,7 @@ def _rebuild(ctx: JobContext, model_id: str, refetch: bool) -> str:
     if refetch and m.daz_pg_analyzer is None:
         raise RuntimeError(_CMS_UNAVAILABLE)  # before creating a generation it can't finish
     ctx.report("rebuild", f"Preparing a new index generation for {model_id}…")
+    _ensure_model(model_id)
     gen = m.builder.start_or_resume_rebuild(model_id, refetch=refetch)
     _check_cancel(ctx, gen)
     # A refetch generation always finishes its refetch, whichever command resumes it.
@@ -244,12 +282,17 @@ def run_index_job(ctx: JobContext) -> str:
     if phase != "etl":
         active = m.generations.active()
         if active is None:
+            if limit is not None:
+                logger.warning("--limit (%s) does not apply to the first build: the first index "
+                               "generation embeds every product so it can be promoted.", limit)
             parts.append(_rebuild(ctx, p.get("model") or configured_model_id(), refetch=False))
         else:
             if p.get("model") and p["model"] != active["model_id"]:
                 logger.warning("The active generation uses %s, not %s; embedding with %s. Run "
                                "`vab index rebuild --model %s` to switch models.",
                                active["model_id"], p["model"], active["model_id"], p["model"])
+            if m.generations.pending_count(active["id"]):
+                _ensure_model(active["model_id"])
             embedded = m.builder.embed_pending(active, cancel_check=ctx.cancelled,
                                                on_progress=ctx.on_progress, limit=limit)
             if ctx.cancelled():
@@ -294,7 +337,18 @@ def run_repair_job(ctx: JobContext) -> str:
             moved = quarantine_store(chroma_path, error)
             action = (f"The vector store could not be opened; moved it to {moved!r}. Other "
                       "collections in it (e.g. morphs) must be re-indexed.")
-    _prepare()
+    from catalog.builder import AdoptionFailed
+    try:
+        _prepare()
+    except AdoptionFailed as e:
+        if e.kind != "unreadable":
+            raise  # a model mismatch is fixed by configuring the right model, not a rebuild
+        # The legacy collection can't be read: build a new index instead. It is left in
+        # place (not referenced by any generation, so inert).
+        logger.warning("Repair: %s Building a new index instead.", e)
+        action += (f" The existing index collection {m.builder.legacy_collection!r} could not "
+                   "be read; a new index was built instead.")
+        m.builder.cleanup_retired()
     if ctx.cancelled():
         raise JobCancelled()
     active = m.generations.active()

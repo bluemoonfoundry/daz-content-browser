@@ -67,6 +67,11 @@ class GenerationStore:
             row = conn.execute(f"SELECT * FROM index_generations WHERE {where}", params).fetchone()
         return dict(row) if row else None
 
+    def has_any(self) -> bool:
+        """Whether any generation row exists (in any status)."""
+        with self._conn() as conn:
+            return conn.execute("SELECT 1 FROM index_generations LIMIT 1").fetchone() is not None
+
     def active(self) -> Optional[dict]:
         return self._one("status = 'active'")
 

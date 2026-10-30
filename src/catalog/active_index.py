@@ -9,12 +9,14 @@ configured one: vectors from different models are not comparable.
 
 import logging
 import threading
-from typing import Optional
+import time
+from typing import Callable, Optional
 
 import embedding_utils
 from catalog.generations import GenerationStore
 from catalog.model_config import configured_model_id
-from catalog.status import rebuild_hint
+from catalog.builder import AdoptionFailed
+from catalog.status import no_index_hint, rebuild_hint
 from catalog.store import CatalogStore
 from managers.chroma_db_manager import ChromaDbManager, VectorStoreUnavailable, _is_fatal
 
@@ -34,17 +36,62 @@ class SearchUnavailable(RuntimeError):
         self.repair = repair
 
 
+# While there is no generation at all, adoption of the legacy collection is re-attempted at
+# most this often (it opens Chroma; status is polled).
+_ADOPT_RETRY_SECONDS = 30.0
+
+
 class ActiveIndex:
-    def __init__(self, gens: GenerationStore, chroma_path: str):
+    def __init__(self, gens: GenerationStore, chroma_path: str,
+                 adopt: Optional[Callable[[], Optional[dict]]] = None):
+        """``adopt`` adopts the pre-generations collection (GenerationBuilder.adopt_legacy for
+        the configured model); it runs while no generation exists at all, so an upgraded
+        install serves search before any index job has run."""
         self.gens = gens
         self.chroma_path = chroma_path
+        self._adopt = adopt
+        self._adopt_lock = threading.Lock()
+        self._adopt_tried: Optional[float] = None
+        self.adoption_error: Optional[AdoptionFailed] = None
         self._lock = threading.Lock()
         self._gen_id: Optional[int] = None
         self._mgr: Optional[ChromaDbManager] = None
 
+    def ensure_adopted(self, force: bool = False) -> None:
+        """Adopt the legacy collection if no generation exists yet. Never raises: a failure
+        is logged, and an AdoptionFailed is kept on ``adoption_error`` for status/search."""
+        if self._adopt is None:
+            return
+        with self._adopt_lock:
+            now = time.monotonic()
+            if (not force and self._adopt_tried is not None
+                    and now - self._adopt_tried < _ADOPT_RETRY_SECONDS):
+                return
+            self._adopt_tried = now
+            try:
+                if self.gens.has_any():
+                    self.adoption_error = None
+                    return
+                self._adopt()
+                self.adoption_error = None
+            except AdoptionFailed as e:
+                if str(e) != str(self.adoption_error):
+                    logger.error("The existing search index could not be adopted: %s", e)
+                self.adoption_error = e
+            except Exception:
+                logger.exception("Could not adopt the existing search index.")
+
+    def adoption_status(self) -> Optional[dict]:
+        """``{"error", "repair"}`` while adoption has failed, else None."""
+        e = self.adoption_error
+        return None if e is None else {"error": str(e), "repair": e.repair}
+
     def current(self) -> Optional[tuple]:
         """``(generation, ChromaDbManager)`` for the active generation, or None if there is none."""
         gen = self.gens.active()
+        if gen is None and self._adopt is not None:
+            self.ensure_adopted()
+            gen = self.gens.active()
         with self._lock:
             if gen is None:
                 self._gen_id = self._mgr = None
@@ -65,21 +112,25 @@ class ActiveIndex:
     def _serving(self) -> tuple:
         cur = self.current()
         if cur is None:
-            raise SearchUnavailable(
-                "no_index", f"No search index has been built yet. {rebuild_hint(configured_model_id())}")
+            if self.adoption_error is not None:
+                raise SearchUnavailable("adoption_failed", str(self.adoption_error))
+            raise SearchUnavailable("no_index", no_index_hint())
         gen = cur[0]
         if not embedding_utils.model_available(gen["model_id"]):
             raise SearchUnavailable("model_missing", _model_missing_hint(gen["model_id"]))
         return cur
 
     def search(self, catalog: CatalogStore, query: str, *, max_results: int, category=None,
-               artists=None, compatible_figures=None, tags=None) -> list:
+               artists=None, compatible_figures=None, tags=None,
+               installed: Optional[bool] = None) -> list:
         """Catalog rows for the nearest assets, closest first, each with ``distance`` and
         ``relevance_score``. Filters are exact (resolved from the catalog, OR within a list,
-        AND across lists). Raises SearchUnavailable when no usable index exists."""
+        AND across lists); ``installed`` restricts to (not) installed assets. Raises
+        SearchUnavailable when no usable index exists."""
         gen, mgr = self._serving()
         allowed = catalog.asset_ids_matching(category=category, artists=artists,
-                                             compatible_figures=compatible_figures, tags=tags)
+                                             compatible_figures=compatible_figures, tags=tags,
+                                             installed=installed)
         if allowed is not None and not allowed:
             return []
         try:

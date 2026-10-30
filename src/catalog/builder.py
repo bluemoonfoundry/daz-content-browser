@@ -10,6 +10,7 @@ without re-embedding: the legacy collection becomes active generation 1 and its 
 
 import logging
 import os
+import sqlite3
 from typing import Callable, Optional
 
 import embedding_utils
@@ -27,6 +28,15 @@ _PROBE_TEXT = "dimension probe"
 
 class RebuildIncomplete(Exception):
     """A finished build is too broken to replace a working active generation."""
+
+
+class AdoptionFailed(Exception):
+    """The legacy collection exists but can't be adopted; ``repair`` says how to fix it."""
+
+    def __init__(self, message: str, repair: str, kind: str):
+        super().__init__(f"{message} {repair}")
+        self.repair = repair
+        self.kind = kind  # "unreadable" | "model_mismatch"
 
 
 def _batch_size_default() -> int:
@@ -66,12 +76,7 @@ class GenerationBuilder:
     # --- adoption --------------------------------------------------------------------
 
     def _has_generations(self) -> bool:
-        self.catalog.ensure_migrated()
-        conn = connect(self.gens.db_path)
-        try:
-            return conn.execute("SELECT COUNT(*) FROM index_generations").fetchone()[0] > 0
-        finally:
-            conn.close()
+        return self.gens.has_any()
 
     def _views_by_sku(self, skus: list) -> dict:
         out: dict = {}
@@ -89,7 +94,15 @@ class GenerationBuilder:
         return out
 
     def adopt_legacy(self, model_id: str) -> Optional[dict]:
-        """Adopt the pre-generations collection as active generation 1, without re-embedding."""
+        """Adopt the pre-generations collection as active generation 1, without re-embedding.
+
+        Returns the adopted generation, or None when there is nothing to adopt (no legacy
+        collection, an empty one, or generations already exist). Another process adopting
+        concurrently counts as success: its generation is returned. Raises AdoptionFailed
+        when the legacy collection exists but can't be adopted (unreadable, or built with a
+        model of another dimension than ``model_id``), so callers never silently build a
+        new index over it.
+        """
         if not self.legacy_collection or self._has_generations():
             return None
         mgr = ChromaDbManager(self.chroma_path, self.legacy_collection)
@@ -102,23 +115,63 @@ class GenerationBuilder:
         except BaseException as e:
             if _is_fatal(e):
                 raise
-            logger.error("Cannot adopt legacy collection %r (%s); a rebuild is required.",
-                         self.legacy_collection, _err(e))
-            return None
+            logger.error("Cannot adopt legacy collection %r (%s).", self.legacy_collection, _err(e))
+            raise AdoptionFailed(
+                f"The existing index collection {self.legacy_collection!r} could not be read "
+                f"({_err(e)}).",
+                "If the vector store is corrupt, run `vab index repair` (or POST /api/v1/update "
+                "{\"mode\": \"repair\"}) to rebuild the index from SQLite.",
+                "unreadable") from e
         if not dim:
             logger.info("Legacy collection %r is empty; nothing to adopt.", self.legacy_collection)
             return None
+        self._check_model_dim(model_id, dim)
         views = self._views_by_sku(ids)
         # Ids with no catalog row are recorded too (doc_hash NULL, no view row), so the
         # orphan sweep in embed_pending deletes them instead of leaving them searchable.
         items = [(views[sku][0], sku, views[sku][1]) if sku in views else (f"daz:{sku}", sku, None)
                  for sku in ids]
         # One transaction: an interrupted adoption leaves nothing behind and is retried.
-        gen = self.gens.adopt(self.legacy_collection, model_id, dim, DOC_FORMAT_VERSION,
-                              LATEST_VERSION, items)
+        try:
+            gen = self.gens.adopt(self.legacy_collection, model_id, dim, DOC_FORMAT_VERSION,
+                                  LATEST_VERSION, items)
+        except sqlite3.IntegrityError:
+            # Another process (server, worker, CLI) adopted between our check and insert.
+            active = self.gens.active()
+            if active is None:
+                raise
+            logger.info("Legacy collection %r was adopted by another process (generation %d).",
+                        self.legacy_collection, active["id"])
+            return active
         logger.info("Adopted legacy collection %r as generation %d (%d of %d vectors matched).",
                     self.legacy_collection, gen["id"], sum(1 for s in ids if s in views), len(ids))
         return gen
+
+    def _check_model_dim(self, model_id: str, dim: int) -> None:
+        """Refuse to stamp ``model_id`` on vectors of another dimension (when it can be checked)."""
+        if not embedding_utils.model_available(model_id):
+            logger.warning("Adopting legacy collection %r as %s without a dimension check: the "
+                           "model files are not available locally, so cannot verify that %s "
+                           "built it.", self.legacy_collection, model_id, model_id)
+            return
+        try:
+            model_dim = int(embedding_utils.generate_embeddings(
+                _PROBE_TEXT, is_query=False, model_id=model_id).shape[-1])
+        except BaseException as e:
+            if _is_fatal(e):
+                raise
+            logger.warning("Adopting legacy collection %r as %s; cannot verify its dimension "
+                           "(%s).", self.legacy_collection, model_id, _err(e))
+            return
+        if model_dim != dim:
+            raise AdoptionFailed(
+                f"The existing index collection {self.legacy_collection!r} holds {dim}-dimension "
+                f"vectors, but the configured model {model_id} embeds at {model_dim} dimensions, "
+                f"so it did not build that index.",
+                "Set the model that built the index (EMBEDDING_MODEL_ID in .env, or "
+                "embedding_model in settings.json / Settings), then retry; switch models "
+                "afterwards with `vab index rebuild --model <id>`.",
+                "model_mismatch")
 
     # --- embedding -------------------------------------------------------------------
 

@@ -36,9 +36,18 @@ builder = GenerationBuilder(
     legacy_collection=os.environ.get("CHROMA_COLLECTION", "daz_products2"),
 )
 
+
+def _adopt_legacy():
+    from catalog.model_config import configured_model_id
+    return builder.adopt_legacy(configured_model_id())
+
+
 # What the API searches: the active generation's collection, re-read on every call so a
 # promotion by the worker process is picked up. Opens lazily, like every Chroma handle.
-active_index = ActiveIndex(generations, os.environ.get("CHROMA_PATH", "chroma_db"))
+# While no generation exists, the pre-generations collection is adopted (server startup,
+# or lazily on first use), so an upgraded install serves search before any index job.
+active_index = ActiveIndex(generations, os.environ.get("CHROMA_PATH", "chroma_db"),
+                           adopt=_adopt_legacy)
 
 job_store = JobStore(os.path.abspath(os.environ.get("JOBS_DB_PATH", "index_jobs.db")))
 

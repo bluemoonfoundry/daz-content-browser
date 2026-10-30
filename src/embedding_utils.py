@@ -47,8 +47,8 @@ def model_loaded(model_id: str | None = None) -> bool:
 def _export_model(model_id: str | None = None):
     """Download a model from HuggingFace, export to ONNX, and cache locally.
 
-    Uses optimum + transformers. Only for the configured model's first run (via
-    load_embedding_model); never call for other models at runtime.
+    Uses optimum + transformers. Only via load_embedding_model (server startup, index
+    jobs); never inside a request.
     """
     from optimum.onnxruntime import ORTModelForFeatureExtraction
     from transformers import AutoTokenizer
@@ -108,17 +108,22 @@ def _load_session(model_id: str):
     return pair
 
 
-def load_embedding_model(model_id: str | None = None):
-    """Load a model, exporting it first if it is the configured model and files are missing.
+def load_embedding_model(model_id: str | None = None, allow_export: bool | None = None):
+    """Load a model, exporting it first when its files are missing and export is allowed.
 
-    The only place export can happen: startup / explicit calls, never inside a request.
+    ``allow_export=None`` (server startup) exports only the configured model; index jobs
+    pass ``True`` for the model they build or embed with. A frozen build never exports
+    (raises ModelUnavailable). Request paths never call this: generate_embeddings and
+    get_embedding_model never export.
     """
     import sys
     global _session, _tokenizer
 
     configured = configured_model_id()
     model_id = model_id or configured
-    if model_id == configured and not (model_dir(model_id) / "model.onnx").exists():
+    if allow_export is None:
+        allow_export = model_id == configured
+    if allow_export and not (model_dir(model_id) / "model.onnx").exists():
         if getattr(sys, 'frozen', False):
             raise ModelUnavailable(
                 f"ONNX model not found at '{model_dir(model_id)}'. "

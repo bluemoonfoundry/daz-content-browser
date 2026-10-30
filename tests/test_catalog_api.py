@@ -51,9 +51,9 @@ class FakeAnalyzer:
     def count_skus(self):
         return len(set(self.skus))
 
-    def get_all_skus(self):
+    def get_sku_modified(self):
         self.sku_reads += 1
-        return list(self.skus)
+        return {s: "2024-01-01T00:00:00" for s in self.skus}
 
     def get_content_roots(self):
         return []
@@ -222,7 +222,8 @@ def test_search_without_active_generation_returns_503(api, env):
     env.gens.mark_failed(env.active["id"], "gone")
     r = api.post("/api/v1/search", json={"query": "robe"})
     assert r.status_code == 503 and r.json()["detail"]["reason"] == "no_index"
-    assert "vab index rebuild" in r.json()["detail"]["repair"]
+    assert "`vab load`" in r.json()["detail"]["repair"]
+    assert "vab index rebuild" not in r.json()["detail"]["repair"]
 
 
 def test_query_keeps_mcp_response_shape(api):
@@ -326,7 +327,7 @@ def test_status_counts_add_and_remove(api, env):
     s = api.get("/api/v1/status").json()
     assert s["postgres_count"] == 2 and s["postgres_connected"]
     assert s["new_products"] == 1 and s["update_available"] is True
-    assert s["index"]["pending_cms"] == {"new": 1, "removed": 1}
+    assert s["index"]["pending_cms"] == {"new": 1, "changed": 0, "removed": 1}
     assert s["index"]["cms_reachable"] is True
 
 
@@ -341,7 +342,7 @@ def test_status_without_cms(api, env, monkeypatch):
 def test_status_survives_cms_errors(api, env, monkeypatch):
     def boom():
         raise RuntimeError("connection reset")
-    monkeypatch.setattr(env.analyzer, "get_all_skus", boom)
+    monkeypatch.setattr(env.analyzer, "get_sku_modified", boom)
     s = api.get("/api/v1/status").json()
     assert s["index"]["pending_cms"] is None and s["index"]["cms_reachable"] is False
     assert s["new_products"] == 0 and s["update_available"] is False

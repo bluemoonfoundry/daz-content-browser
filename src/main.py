@@ -309,7 +309,7 @@ def query_command(args):
 def stats_command(args):
     """Prints the active index generation's state and the catalog's filter values."""
     from catalog.model_config import configured_model_id
-    from catalog.status import index_status, rebuild_hint
+    from catalog.status import index_status, repair_hint
     from managers.managers import catalog, generations
 
     if catalog.migration_error:
@@ -338,7 +338,11 @@ def stats_command(args):
         print("Active generation:       none")
     print(f"Last Document Update:    {last_update}")
     if status["rebuild_required"]:
-        print(f"Rebuild required ({status['rebuild_reason']}): {rebuild_hint(configured)}")
+        hint = repair_hint(status["rebuild_reason"], configured)
+        if status["rebuild_reason"] == "no_index":
+            print(hint)
+        else:
+            print(f"Rebuild required ({status['rebuild_reason']}): {hint}")
     if status["resume_hint"]:
         print(status["resume_hint"])
     print("---------------------------------")
@@ -505,7 +509,8 @@ def main():
              "(same as `index rebuild --refetch`). Does NOT delete SQLite; an interrupted run resumes.",
     )
     parsers["load"].add_argument('--all', action='store_true', help="Re-fetch store data for every listed product, not just new or changed ones.")
-    parsers["load"].add_argument('--limit', type=int, help="Process at most this many new/changed products (and embed at most this many). Ideal for testing.")
+    parsers["load"].add_argument('--limit', type=int, help="Process at most this many new/changed products (and embed at most this many). Ideal for "
+         "testing. Does not apply to the first build, which embeds every product so it can be promoted.")
     parsers["load"].add_argument('--phase', type=str, choices=['etl', 'embed', 'all'], default='all', help="Run only a specific phase: 'etl' (reconcile the DAZ CMS), 'embed', or both if omitted.")
     parsers["load"].add_argument(
         '--model', default=None, metavar="MODEL_ID",

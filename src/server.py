@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 import embedding_utils
 from catalog.active_index import SearchUnavailable, mcp_response
 from catalog.model_config import DEFAULT_MODEL_ID, SETTINGS_PATH, configured_model_id
-from catalog.status import index_status, migration_hint, pending_cms_diff, rebuild_hint
+from catalog.status import index_status, migration_hint, pending_cms_diff, rebuild_hint, repair_hint
 from catalog.store import CMS_SOURCE
 from embedding_utils import load_embedding_model
 from demo_data import (
@@ -157,10 +157,10 @@ _cms_cache: tuple | None = None  # (monotonic time, (postgres_count, pending_cms
 def _cms_snapshot() -> tuple:
     """``(postgres_count, pending_cms)`` from the DAZ CMS; ``(-1, None)`` when unreachable.
 
-    ``pending_cms`` is a key-set diff of CMS SKUs against the catalog's present CMS records
-    (``{"new", "removed"}``), or None when either side can't be read. Cached briefly: the UI
-    polls /status, and each snapshot reads every SKU from PostgreSQL. A stale value only
-    delays the "update available" hint by one TTL.
+    ``pending_cms`` diffs every CMS SKU and modified date against the catalog's present CMS
+    records (``{"new", "changed", "removed"}``), or is None when either side can't be read.
+    Cached briefly: the UI polls /status, and each snapshot reads every SKU from PostgreSQL.
+    A stale value only delays the "update available" hint by one TTL.
     """
     global _cms_cache
     now = time.monotonic()
@@ -184,10 +184,10 @@ def _read_cms_snapshot() -> tuple:
     if catalog.migration_error:
         return count, None
     try:
-        skus = daz_pg_analyzer.get_all_skus()
-        if count > 0 and not skus:  # get_all_skus() answers [] on a query error
+        modified = daz_pg_analyzer.get_sku_modified()
+        if modified is None or (count > 0 and not modified):  # None: the query failed
             return count, None
-        return count, pending_cms_diff(skus, catalog.present_keys(CMS_SOURCE))
+        return count, pending_cms_diff(modified, catalog.present_modified(CMS_SOURCE))
     except Exception:
         logger.warning("Could not diff DAZ CMS SKUs against the catalog.", exc_info=True)
         return count, None
@@ -202,7 +202,12 @@ def _index_snapshot() -> dict:
         job_active = False
     postgres_count, pending = _cms_snapshot()
     configured = configured_model_id()
-    idx = index_status(catalog, generations, configured, pending is not None, pending, job_active)
+    adoption = None
+    if not catalog.migration_error:
+        active_index.ensure_adopted()  # rate-limited; a no-op once any generation exists
+        adoption = active_index.adoption_status()
+    idx = index_status(catalog, generations, configured, pending is not None, pending, job_active,
+                       adoption_error=adoption)
 
     vector_store = None  # None: no active generation (or no readable catalog)
     if not catalog.migration_error and idx["error"] is None:
@@ -220,7 +225,7 @@ def _index_snapshot() -> dict:
     elif vector_store is not None and not vector_store["ok"]:
         repair = vector_store.get("repair")
     elif idx["rebuild_required"]:
-        repair = rebuild_hint(configured)
+        repair = repair_hint(idx["rebuild_reason"], configured, idx["adoption_error"])
     else:
         repair = idx["resume_hint"]
     degraded = bool(catalog.migration_error or idx["error"] or idx["rebuild_required"]
@@ -330,14 +335,23 @@ async def lifespan(app: FastAPI):
         if catalog.migration_error:
             logger.error(f"Catalog unavailable — {migration_hint(catalog.migration_error)}")
         else:
+            # An upgraded install's pre-generations index is adopted here (no re-embedding),
+            # so search works before any index job runs. Never blocks startup.
+            try:
+                active_index.ensure_adopted(force=True)
+            except Exception:
+                logger.exception("Could not adopt the existing search index.")
             try:
                 health = active_index.health()
             except Exception:
                 logger.exception("Could not check the active index.")
             else:
-                if health is None:
+                if health is None and active_index.adoption_error is not None:
+                    logger.error("Search is unavailable: the existing index could not be adopted. "
+                                 f"{active_index.adoption_error}")
+                elif health is None:
                     logger.warning("No active index generation — search is unavailable. "
-                                   + rebuild_hint(configured_model_id()))
+                                   + repair_hint("no_index", configured_model_id()))
                 elif not health["ok"]:
                     logger.error(f"Vector store unavailable — search is degraded. {health['repair']}")
         _reconcile_jobs()
@@ -473,7 +487,8 @@ def get_status():
         "sqlite_count": sqlite_count,
         "chromadb_count": _vector_count(idx),
         "new_products": pending["new"] if pending else 0,
-        "update_available": bool(pending and (pending["new"] or pending["removed"])),
+        "update_available": bool(pending and (pending["new"] or pending["changed"]
+                                               or pending["removed"])),
         "repair": snap["repair"],
         "index": idx,
     }
@@ -497,9 +512,12 @@ def get_health():
             # The catalog can't be read, so whether an index exists is unknown.
             vector_store = {"ok": False, "error": "Index state unknown: the catalog is unavailable.",
                             "repair": snap["repair"]}
+        elif idx["adoption_error"]:
+            vector_store = {"ok": False, "error": idx["adoption_error"]["error"],
+                            "repair": idx["adoption_error"]["repair"]}
         else:
             vector_store = {"ok": False, "error": "No active index generation.",
-                            "repair": rebuild_hint(configured)}
+                            "repair": repair_hint("no_index", configured)}
     query_model = active["model_id"] if active else configured
     flagged = idx["rebuild_required"] or idx["rebuild_interrupted"] or idx["error"]
     components = {
@@ -784,10 +802,9 @@ def run_search(request: UISearchRequest):
             category=f.category or None,
             artists=[f.artist] if f.artist else None,
             compatible_figures=[f.compatible_figures] if f.compatible_figures else None,
+            installed=f.is_installed,
         )
     results = [_format_product(r) for r in rows]
-    if f.is_installed is not None:
-        results = [r for r in results if r["is_installed"] == f.is_installed]
     if request.min_relevance > 0:
         results = [r for r in results if r.get("relevance_score", 0) >= request.min_relevance]
     took_ms = int((time.monotonic() - started) * 1000)

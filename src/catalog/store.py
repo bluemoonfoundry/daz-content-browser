@@ -219,6 +219,13 @@ class CatalogStore:
             return {r[0] for r in conn.execute(
                 "SELECT source_key FROM source_records WHERE source = ? AND present = 1", (source,))}
 
+    def present_modified(self, source: str) -> dict:
+        """``{key: source_modified}`` of the records ``source`` currently lists."""
+        with self._conn() as conn:
+            return {r[0]: r[1] for r in conn.execute(
+                "SELECT source_key, source_modified FROM source_records"
+                " WHERE source = ? AND present = 1", (source,))}
+
     # --- filters ---------------------------------------------------------------------
 
     @staticmethod
@@ -242,9 +249,12 @@ class CatalogStore:
         return conditions, params
 
     def asset_ids_matching(self, category=None, artists=None, compatible_figures=None,
-                           tags=None) -> Optional[set]:
+                           tags=None, installed: Optional[bool] = None) -> Optional[set]:
         """Asset ids passing the exact filters, or None when no filter is given."""
         conditions, params = self._filter_clauses(category, artists, compatible_figures, tags)
+        if installed is not None:
+            conditions.append("v.installed = ?")
+            params.append(1 if installed else 0)
         if not conditions:
             return None
         with self._conn() as conn:

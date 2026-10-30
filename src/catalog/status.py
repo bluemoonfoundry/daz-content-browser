@@ -5,6 +5,7 @@ stays cheap enough for the UI to poll.
 """
 
 import logging
+from datetime import date, datetime
 from typing import Optional
 
 import embedding_utils
@@ -20,21 +21,51 @@ def rebuild_hint(model_id: str) -> str:
             f"to rebuild the index for {model_id}.")
 
 
+def no_index_hint() -> str:
+    """For ``no_index``: the incremental run builds the first generation, or adopts an
+    existing (pre-generations) index without re-embedding. Never a rebuild."""
+    return ("No search index has been built yet. Run `vab load` (or POST /api/v1/update "
+            "{\"mode\": \"update\"}) to build the first index; an existing index is adopted "
+            "without re-embedding.")
+
+
+def repair_hint(reason: Optional[str], configured_model: str,
+                adoption_error: Optional[dict] = None) -> Optional[str]:
+    """The repair guidance for a ``rebuild_reason``."""
+    if reason is None:
+        return None
+    if reason == "no_index":
+        return no_index_hint()
+    if reason == "adoption_failed" and adoption_error:
+        return adoption_error["repair"]
+    return rebuild_hint(configured_model)
+
+
 def migration_hint(error: str) -> str:
     return f"{error}; restart to retry; see server log"
 
 
-def pending_cms_diff(cms_skus, present_keys: set) -> dict:
-    """Pending DAZ CMS changes from a key-set diff: SKUs the CMS has that the catalog's
-    present ``daz_cms`` records lack (new), and the reverse (removed)."""
-    cms = {str(s) for s in cms_skus if s}
-    present = {str(k) for k in present_keys}
-    return {"new": len(cms - present), "removed": len(present - cms)}
+def _plain(value):
+    """ISO-format datetimes exactly as the ETL stores ``source_modified`` (ruling R1)."""
+    return value.isoformat() if isinstance(value, (datetime, date)) else value
 
 
-def rebuild_reason(active: Optional[dict], configured_model: str) -> Optional[str]:
+def pending_cms_diff(cms_modified: dict, present_modified: dict) -> dict:
+    """Pending DAZ CMS changes: ``{sku: modified date}`` from the CMS against the catalog's
+    present ``daz_cms`` records' ``{key: source_modified}``. New = listed but not present,
+    changed = present with another modified date, removed = present but no longer listed.
+    """
+    cms = {str(k): _plain(v) for k, v in cms_modified.items() if k}
+    present = {str(k): v for k, v in present_modified.items()}
+    return {"new": sum(1 for k in cms if k not in present),
+            "changed": sum(1 for k, v in cms.items() if k in present and v != present[k]),
+            "removed": sum(1 for k in present if k not in cms)}
+
+
+def rebuild_reason(active: Optional[dict], configured_model: str,
+                   adoption_error: Optional[dict] = None) -> Optional[str]:
     if active is None:
-        return "no_index"
+        return "adoption_failed" if adoption_error else "no_index"
     if active["model_id"] != configured_model:
         return "model_changed"
     if active["doc_format_version"] != DOC_FORMAT_VERSION:
@@ -50,7 +81,10 @@ def _resume_hint(gen: dict) -> str:
 
 
 def index_status(catalog: CatalogStore, gens: GenerationStore, configured_model: str,
-                 cms_reachable: bool, pending_cms: Optional[dict], job_active: bool = False) -> dict:
+                 cms_reachable: bool, pending_cms: Optional[dict], job_active: bool = False,
+                 adoption_error: Optional[dict] = None) -> dict:
+    """``adoption_error`` (``{"error", "repair"}``): the legacy index exists but could not be
+    adopted; reported as ``rebuild_reason="adoption_failed"`` while nothing is active."""
     out = {
         "assets": None,
         "vectors": None,
@@ -65,6 +99,7 @@ def index_status(catalog: CatalogStore, gens: GenerationStore, configured_model:
         "migration_error": catalog.migration_error,
         "cms_reachable": cms_reachable,
         "pending_cms": pending_cms,
+        "adoption_error": None,
         "error": None,
     }
     if catalog.migration_error:
@@ -83,7 +118,9 @@ def index_status(catalog: CatalogStore, gens: GenerationStore, configured_model:
             out["rebuild_interrupted"] = not job_active
             if not job_active:
                 out["resume_hint"] = _resume_hint(building)
-        reason = rebuild_reason(active, configured_model)
+        if active is None and adoption_error:
+            out["adoption_error"] = adoption_error
+        reason = rebuild_reason(active, configured_model, out["adoption_error"])
         out["rebuild_required"] = reason is not None
         out["rebuild_reason"] = reason
     except Exception as e:  # a locked or damaged DB must not break status polling

@@ -101,9 +101,12 @@ generations) → one ChromaDB collection per index generation
   exports model to `models/bge-large-en-v1.5/` on first run, loads from cache thereafter
 - `src/managers/chroma_db_manager.py` — ChromaDB wrapper; cosine-similarity search;
   `reconnect()` refreshes the client when the connection goes stale mid-batch
-- `src/managers/postgres_db_manager.py` — ETL + embedding pipeline; async web scraping;
-  writes to SQLite then calls `generate_embeddings()` in batches of `BATCH_SIZE` (default 1024),
-  which internally sub-batches at `EMBEDDING_BATCH_SIZE` (default 32) for ONNX inference
+- `src/managers/postgres_db_manager.py` — store-page scraping helpers only (`scrape_many`,
+  async, `ETL_SCRAPE_CONCURRENCY`); the reconciler (`catalog/reconcile.py`) calls them
+- Embedding lives in `src/catalog/builder.py`: it embeds pending assets in batches of
+  `BATCH_SIZE` (default 512 unless `.env` sets it), and `generate_embeddings()` sub-batches
+  at `EMBEDDING_BATCH_SIZE` (default 32) for ONNX inference. Index jobs export a missing
+  model first (not in a frozen build); search/status requests never export
 - `src/catalog/` — the SQLite catalog and index generations: `store.py` (per-source records,
   `asset_view`, exact-match artist/figure lookup tables), `schema.py` (migrations),
   `documents.py` (embedding text/metadata), `reconcile.py` (CMS → catalog), `generations.py`
@@ -137,9 +140,16 @@ when complete, and an interrupted rebuild resumes when run again. `vab load --fo
 `{"force": true}`) additionally re-fetches every product's store data first. SQLite is never
 deleted.
 
-**Index generations:** On first start the legacy `products` table is migrated into the
-catalog and renamed `products_legacy` (kept for one release); the existing Chroma collection
-is adopted as generation 1. `index_generations` tracks generations and which is active;
+**Index generations:** On first use of the catalog the legacy `products` table is migrated
+into it and renamed `products_legacy` (kept for one release). The existing Chroma collection
+(`CHROMA_COLLECTION`) is adopted as generation 1 without re-embedding — by the server at
+startup (or lazily on the first search/status while no generation exists), or by the first
+index job, whichever comes first. Adoption checks the configured model's dimension against
+the collection when the model files are available; if the collection can't be read or the
+dimension differs, status/health report `adoption_failed` with the fix (`vab index repair`,
+or configure the model that built it) and index jobs fail instead of building over it. With
+no index at all (`no_index`), the hint is `vab load`, which builds (or adopts) the first
+generation; `--limit` does not apply to that first build. `index_generations` tracks generations and which is active;
 `asset_vectors` records which asset is embedded in which generation and from which document
 hash, so only new or changed assets are re-embedded. A rebuild with more than 1% (minimum 10)
 failed assets will not replace an existing index: the active generation stays live and the

@@ -119,6 +119,24 @@ class DazDBAnalyzer:
         results = self._execute_query(sql)
         return [row['token'] for row in results] if results else []
 
+    def get_sku_modified(self):
+        """``{sku: modified}`` for every product with a non-empty SKU: the same
+        ``COALESCE(last_update, date_installed)`` and ``isoformat()`` conversion as
+        ``get_all_products`` (so it compares equal to stored ``source_modified``), first row
+        per duplicate token in the same name order. None when the query fails.
+        """
+        sql = ("SELECT token, COALESCE(last_update, date_installed) AS modified "
+               "FROM dzcontent.product WHERE token IS NOT NULL AND token != '' ORDER BY name")
+        results = self._execute_query(sql)
+        if results is None:
+            return None
+        out: dict = {}
+        for row in results:
+            value = row["modified"]
+            out.setdefault(row["token"], value.isoformat() if isinstance(value, (datetime, date))
+                           else value)
+        return out
+
     def count_skus(self) -> int:
         """Returns the count of distinct SKUs in PostgreSQL.
 

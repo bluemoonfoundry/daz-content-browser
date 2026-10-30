@@ -72,7 +72,8 @@ def reconcile_daz(catalog: CatalogStore, cms_rows: list,
                   scrape: Callable[[list], dict], figure_names: list, *,
                   refetch_before: Optional[str] = None, refetch_all: bool = False,
                   limit: Optional[int] = None, now: Optional[str] = None,
-                  cancel_check=None) -> ReconcileResult:
+                  cancel_check=None,
+                  on_scrape_plan: Optional[Callable[[int], None]] = None) -> ReconcileResult:
     """Bring the catalog's DAZ source records in line with ``cms_rows``.
 
     ``scrape(skus)`` returns ``{sku: web payload dict | Exception}``. ``limit`` caps how
@@ -86,6 +87,9 @@ def reconcile_daz(catalog: CatalogStore, cms_rows: list,
     ``cancel_check`` do; if its ``source_modified`` also changed it is then processed as
     changed, now or on a later run. ``reappeared`` and ``refreshed_payloads`` (or
     ``changed``) can therefore count the same SKU.
+
+    ``on_scrape_plan(n)`` is called once with the number of SKUs about to be scraped, so a
+    progress reporter can count across the scrape batches.
     """
     now = now or datetime.now(timezone.utc).isoformat()
     rows = _dedupe(cms_rows)
@@ -152,6 +156,8 @@ def reconcile_daz(catalog: CatalogStore, cms_rows: list,
     # again, so this is their only chance to reach the view.
     catalog.refresh_views(touched + already_fresh, figure_names)
 
+    if on_scrape_plan:
+        on_scrape_plan(len(to_scrape))
     for i in range(0, len(to_scrape), SCRAPE_BATCH):
         if cancel_check and cancel_check():
             logger.info("Reconcile cancelled after %d of %d scrapes", i, len(to_scrape))
