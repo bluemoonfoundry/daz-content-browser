@@ -63,16 +63,24 @@ make dev-server
 # Start dev server (demo mode, no database required)
 make demo-server
 
-# Full re-index from scratch (wipes ChromaDB, re-embeds from SQLite)
+# Incremental: reconcile the DAZ CMS into SQLite, embed new/changed products
+vab load
+
+# Re-fetch every product's store data and build a new index generation (SQLite is NOT deleted)
 vab load --force
 
-# Embed only — re-embeds products already in SQLite but missing from ChromaDB
+# Embed only — embeds products already in SQLite that the active generation is missing
 vab load --phase embed
+
+# New generation from SQLite beside the live one, promoted when complete
+# (--refetch = same as load --force; --model switches the embedding model)
+vab index rebuild [--refetch] [--model MODEL_ID]
 
 # Index morph library from DAZ content
 vab morphs index --library-path "C:/path/to/DAZ/library"
 
-# Repair a corrupt/unopenable product vector store (re-embeds from SQLite)
+# Repair a corrupt product vector store: quarantines the Chroma store only if it
+# can't be opened, then rebuilds from SQLite
 vab index repair
 
 # Inspect / cancel index jobs (shared by the API and CLI)
@@ -85,7 +93,8 @@ vab morphs index --library-path "C:/path/to/DAZ/library" --force
 
 ## Architecture Overview
 
-**Data flow:** PostgreSQL (DAZ CMS) → SQLite (enrichment cache) → ChromaDB (vector index)
+**Data flow:** PostgreSQL (DAZ CMS) → SQLite catalog (per-source records, asset view, lookup tables,
+generations) → one ChromaDB collection per index generation
 
 - `src/server.py` — FastAPI app; all HTTP endpoints; lifespan preloads the embedding model
 - `src/embedding_utils.py` — ONNX Runtime inference (BAAI/bge-large-en-v1.5, 1024-dim);
@@ -95,14 +104,21 @@ vab morphs index --library-path "C:/path/to/DAZ/library" --force
 - `src/managers/postgres_db_manager.py` — ETL + embedding pipeline; async web scraping;
   writes to SQLite then calls `generate_embeddings()` in batches of `BATCH_SIZE` (default 1024),
   which internally sub-batches at `EMBEDDING_BATCH_SIZE` (default 32) for ONNX inference
-- `src/managers/sqlite_db_manager.py` — enrichment cache; survives ChromaDB resets
-- `src/managers/managers.py` — module-level singletons imported everywhere; none of them
+- `src/catalog/` — the SQLite catalog and index generations: `store.py` (per-source records,
+  `asset_view`, exact-match artist/figure lookup tables), `schema.py` (migrations),
+  `documents.py` (embedding text/metadata), `reconcile.py` (CMS → catalog), `generations.py`
+  (`index_generations` / `asset_vectors` tables), `builder.py` (builds and promotes
+  generations), `active_index.py` (search against the active generation), `status.py`
+  (reconciliation-backed status/health, rebuild hints), `model_config.py`. Survives
+  ChromaDB resets
+- `src/managers/managers.py` — module-level singletons (`catalog`, `generations`, `builder`,
+  `active_index`, `job_store`, ...) imported everywhere; none of them
   touch ChromaDB at import time (`ChromaDbManager` opens lazily), so a broken store never
   blocks startup
 - `src/managers/job_store.py` — SQLite job table (`JOBS_DB_PATH`, default `index_jobs.db`);
   a partial unique index allows one queued/running job across all processes; workers hold
   a heartbeat lease, and lapsed leases are re-queued (resuming incrementally) or failed
-- `src/index_worker.py` — job handlers (`index`, `repair`, `selftest`) and the worker loop.
+- `src/index_worker.py` — job handlers (`index`, `rebuild`, `repair`, `selftest`) and the worker loop.
   The API never indexes in-process: `POST /api/v1/update` queues a job and spawns a detached
   `vab worker --drain`; `vab load` / `vab index` run their job inline through the same queue
 
@@ -112,30 +128,39 @@ CPU-only torch is a transitive dep of optimum — install with
 
 ## Conventions & Patterns
 
-**Re-indexing:** ChromaDB must be rebuilt when the embedding model changes.
-Use `vab load --force` (or `POST /api/v1/update` with `{"force": true}`).
-SQLite is preserved; only embeddings are regenerated.
+**Re-indexing:** Each embedding model gets its own index generation (a Chroma collection).
+Changing the configured model does not touch the live index: `/api/v1/status` and
+`vab stats` report `rebuild_required` with the reason and the exact command, and rebuilds
+never start automatically. Run `vab index rebuild --model MODEL_ID` (or `POST /api/v1/update`
+with `{"mode": "rebuild"}`); the new generation is built beside the live one and promoted
+when complete, and an interrupted rebuild resumes when run again. `vab load --force` (or
+`{"force": true}`) additionally re-fetches every product's store data first. SQLite is never
+deleted.
+
+**Index generations:** On first start the legacy `products` table is migrated into the
+catalog and renamed `products_legacy` (kept for one release); the existing Chroma collection
+is adopted as generation 1. `index_generations` tracks generations and which is active;
+`asset_vectors` records which asset is embedded in which generation and from which document
+hash, so only new or changed assets are re-embedded. A rebuild with more than 1% (minimum 10)
+failed assets will not replace an existing index: the active generation stays live and the
+job reports a hint to resume with `vab index rebuild --model ...`.
 
 **ChromaDB corruption recovery:** If the server crashes mid-write (force-kill, closed terminal),
 ChromaDB's Rust index can panic with:
 `range start index N out of range for slice of length M`
 The API still starts; `/api/v1/status` and `/api/v1/health` report `degraded` with a repair
-hint. Fix: `vab index repair` (or `POST /api/v1/update` with `{"mode": "repair"}`), which
-resets the collection, or moves an unopenable store aside to `chroma_db.corrupt-<ts>`, and
-re-embeds from SQLite. Panics surface as pyo3 `PanicException`, a `BaseException`, so catch
-`BaseException` around Chroma calls (see `_is_fatal` in `chroma_db_manager.py`). Manual
-fallback:
-```bash
-rd /s /q chroma_db          # Windows
-rm -rf chroma_db            # Mac / Linux
-vab load --phase embed      # re-embed from SQLite (no web scraping needed)
-```
+hint. Fix: `vab index repair` (or `POST /api/v1/update` with `{"mode": "repair"}`). It moves
+the Chroma store aside to `chroma_db.corrupt-<ts>` only if the store cannot be opened, then
+rebuilds the index from SQLite (no CMS contact). Do not delete `chroma_db/` by hand: it holds
+every generation, including the live one. Panics surface as pyo3 `PanicException`, a
+`BaseException`, so catch `BaseException` around Chroma calls (see `_is_fatal` in
+`chroma_db_manager.py`).
 
 **ChromaDB corruption recovery (morphs collection):** The same class of corruption
 (`Error loading hnsw index` / `Error creating hnsw segment reader`) can hit just the
 `morphs` collection if a `vab morphs index` run is killed mid-embed. Corruption is scoped
-to the collection being actively written — the sibling `daz_products2` collection in the
-same `chroma_db/` store is unaffected, so there's no need to wipe the whole store. Recover
+to the collection being actively written — the product-generation collections in the
+same `chroma_db/` store are unaffected, so there's no need to wipe the whole store. Recover
 with a targeted collection reset instead:
 ```python
 from src.managers.chroma_db_manager import ChromaDbManager

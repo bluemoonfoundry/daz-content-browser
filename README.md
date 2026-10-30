@@ -127,10 +127,10 @@ The DAZ CMS database is installed and managed by DAZ Studio — you do not need 
 python vab.py load
 ```
 
-Pulls products from the DAZ CMS database, generates embeddings, and stores everything in the local SQLite + ChromaDB index. First run is slow (embedding generation); subsequent runs are incremental.
+Pulls products from the DAZ CMS database, generates embeddings, and stores everything in the local SQLite catalog and a ChromaDB index generation. First run is slow (embedding generation); subsequent runs are incremental.
 
 ```bash
-python vab.py load --force      # full rebuild from scratch
+python vab.py load --force      # re-fetch every product and build a new index generation (SQLite is kept)
 python vab.py load --limit 100  # process only 100 products (testing)
 python vab.py load --phase etl  # ETL only, skip embedding
 ```
@@ -228,15 +228,18 @@ Queue an index job. Returns immediately. The job runs in a separate worker proce
 
 ```json
 // Request body
-{ "mode": "update" }   // "update" (incremental), "rebuild" (wipe and re-index), "repair"
+{ "mode": "update" }   // "update" (incremental), "rebuild" (new generation, promoted when complete), "repair"
 
 // Response 202
 { "message": "Update process started.", "task_id": "uuid", "mode": "update" }
 ```
 
-`repair` resets the vector store (moving it aside to `chroma_db.corrupt-<timestamp>` if it
-will not open) and re-embeds from SQLite without contacting the DAZ CMS. `force: true` is
-the legacy spelling of `rebuild`. Only one index job runs at a time across the API and the
+`rebuild` builds a new index generation from SQLite beside the live one and switches over
+when it is complete; the live index keeps serving meanwhile. `repair` moves the vector store
+aside to `chroma_db.corrupt-<timestamp>` only if it will not open, then rebuilds from SQLite
+without contacting the DAZ CMS. `force: true` is the legacy spelling of a rebuild that first
+re-fetches every product's store data; SQLite is never deleted. Rebuilds never start
+automatically: after an embedding-model change `/api/v1/status` reports `rebuild_required`. Only one index job runs at a time across the API and the
 CLI. While one is active, this returns `"Update already running."` with that job's `task_id`.
 
 #### `DELETE /api/v1/update`
@@ -587,8 +590,9 @@ python vab.py load [--force] [--all] [--limit N] [--phase {etl,embed,all}]
 ### `index rebuild` / `index repair`
 
 ```bash
-vab index rebuild   # same as load --force
-vab index repair    # reset the vector store and re-embed from SQLite (no DAZ CMS needed)
+vab index rebuild [--refetch] [--model MODEL_ID]   # new generation from SQLite, promoted when complete
+                                                   # (--refetch = same as load --force; SQLite is kept)
+vab index repair    # quarantine the vector store if it won't open, then rebuild from SQLite (no DAZ CMS needed)
 ```
 
 `load`, `index rebuild` and `index repair` run through the same job queue as the API. If

@@ -2,8 +2,6 @@ import logging
 import os
 import psycopg2
 from .daz_db_analyzer import DazDBAnalyzer
-from .sqlite_db_manager import SQLiteWrapper
-from .chroma_db_manager import ChromaDbManager
 from .job_store import JobStore
 from .daz_script_server import DazScriptServerClient
 from catalog.active_index import ActiveIndex
@@ -15,18 +13,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 logger = logging.getLogger(__name__)
-
-sqlite_db = SQLiteWrapper(
-    sqlite_db_path  = os.environ.get("SQLITE_DB_PATH"),
-    sqlite_db_table = os.environ.get("SQLITE_TABLE_NAME")
-)
-
-# Legacy handle on the pre-generations collection; nothing in the API or CLI reads it any
-# more (search/status use ``active_index``). Removed with ``sqlite_db`` in a follow-up.
-chroma_db_manager = ChromaDbManager(
-    os.environ.get("CHROMA_PATH", "chroma_db"),
-    os.environ.get("CHROMA_COLLECTION", "daz_products2")
-)
 
 
 def _open_catalog(db_path, legacy_table) -> CatalogStore:
