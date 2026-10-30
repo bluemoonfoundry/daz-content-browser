@@ -1,0 +1,147 @@
+import sqlite3
+
+import pytest
+
+from catalog.generations import GenerationStore
+from catalog.schema import connect
+from catalog.store import CatalogStore
+
+
+def _asset(db, asset_id, h):
+    conn = connect(db)
+    conn.execute("INSERT OR IGNORE INTO assets (asset_id, sku, created_at) VALUES (?, NULL, 'x')",
+                 (asset_id,))
+    conn.execute("INSERT OR REPLACE INTO asset_view (asset_id, installed, doc_hash, doc_format_version)"
+                 " VALUES (?, 0, ?, 1)", (asset_id, h))
+    conn.commit()
+    conn.close()
+
+
+@pytest.fixture
+def db(tmp_path):
+    path = str(tmp_path / "catalog.db")
+    CatalogStore(path)
+    return path
+
+
+@pytest.fixture
+def gens(db):
+    return GenerationStore(db)
+
+
+@pytest.fixture
+def catalog(db):
+    for a, h in (("daz:a", "ha"), ("daz:b", "hb"), ("daz:c", "hc")):
+        _asset(db, a, h)
+    return db
+
+
+def _build(gens, refetch=False):
+    return gens.create_building("m", 1024, 1, 1, refetch=refetch)
+
+
+def test_create_building_names_collection(gens):
+    g = _build(gens, refetch=True)
+    assert g["status"] == "building"
+    assert g["collection_name"] == f"daz_products_g{g['id']}"
+    assert g["refetch_started_at"] is not None
+    assert gens.building()["id"] == g["id"]
+    assert gens.get(g["id"]) == g
+
+
+def test_no_refetch_leaves_timestamp_null(gens):
+    assert _build(gens)["refetch_started_at"] is None
+
+
+def test_second_building_rejected(gens):
+    _build(gens)
+    with pytest.raises(sqlite3.IntegrityError):
+        _build(gens)
+
+
+def test_promote_first_build_without_active(gens):
+    g = _build(gens)
+    gens.promote(g["id"], now="t1")
+    a = gens.active()
+    assert a["id"] == g["id"] and a["promoted_at"] == "t1" and a["completed_at"] == "t1"
+    assert gens.building() is None
+
+
+def test_promote_swaps_active_atomically(gens):
+    old = gens.create_active_adopted("daz_products2", "m", 1024, 1, 1)
+    assert gens.active()["collection_name"] == "daz_products2"
+    new = _build(gens)
+    gens.promote(new["id"])
+    assert gens.active()["id"] == new["id"]
+    assert [r["id"] for r in gens.retired()] == [old["id"]]
+
+
+def test_promote_requires_building(gens):
+    old = gens.create_active_adopted("c", "m", 1024, 1, 1)
+    with pytest.raises(ValueError):
+        gens.promote(old["id"])
+    with pytest.raises(ValueError):
+        gens.promote(999)
+    assert gens.active()["id"] == old["id"]
+
+
+def test_mark_failed(gens):
+    g = _build(gens)
+    gens.mark_failed(g["id"], "boom")
+    r = gens.get(g["id"])
+    assert r["status"] == "failed" and r["error"] == "boom"
+    assert gens.building() is None
+
+
+def test_pending_covers_missing_stale_and_retryable_errors(gens, catalog):
+    g = _build(gens)["id"]
+    gens.record_current(g, [("daz:a", "v-a", "ha"), ("daz:c", "v-c", "OLD")])
+    assert gens.pending(g) == ["daz:b", "daz:c"]
+    assert gens.pending(g, limit=1) == ["daz:b"]
+    for _ in range(3):
+        gens.record_error(g, ["daz:b"], "boom")
+    assert gens.pending(g) == ["daz:c"]
+    assert gens.pending(g, max_attempts=4) == ["daz:b", "daz:c"]
+    gens.record_current(g, [("daz:b", "v-b", "hb"), ("daz:c", "v-c", "hc")])
+    assert gens.pending(g) == []
+
+
+def test_record_error_on_existing_vector_increments(gens, catalog):
+    g = _build(gens)["id"]
+    gens.record_current(g, [("daz:a", "v-a", "ha")])
+    gens.record_error(g, ["daz:a"], "x")
+    gens.record_error(g, ["daz:a"], "y")
+    row = dict(connect(catalog).execute("SELECT * FROM asset_vectors").fetchone())
+    assert row["status"] == "error" and row["attempts"] == 2 and row["error"] == "y"
+    assert row["vector_id"] == "v-a"
+    gens.record_current(g, [("daz:a", "v-a", "ha")])
+    row = dict(connect(catalog).execute("SELECT * FROM asset_vectors").fetchone())
+    assert row["status"] == "current" and row["attempts"] == 0 and row["error"] is None
+
+
+def test_vector_totals_and_orphans(gens, catalog):
+    g = _build(gens)["id"]
+    gens.record_current(g, [("daz:a", "v-a", "ha"), ("daz:c", "v-c", "OLD"),
+                            ("daz:gone", "v-gone", "hg")])
+    assert gens.vector_totals(g) == {"current": 1, "stale": 1, "missing": 1, "error": 0, "orphan": 1}
+    assert gens.orphans(g) == ["v-gone"]
+    gens.record_error(g, ["daz:b"], "e")
+    assert gens.vector_totals(g) == {"current": 1, "stale": 1, "missing": 0, "error": 1, "orphan": 1}
+    gens.drop_vectors(g, ["daz:gone"])
+    assert gens.orphans(g) == []
+    assert gens.vector_totals(g)["orphan"] == 0
+
+
+def test_vector_lookups(gens, catalog):
+    g = _build(gens)["id"]
+    gens.record_current(g, [("daz:a", "v-a", "ha"), ("daz:b", "v-b", "hb")])
+    assert gens.vector_ids_for(g, {"daz:a", "daz:b", "daz:zz"}) == ["v-a", "v-b"]
+    assert gens.assets_for_vectors(g, ["v-b", "nope"]) == {"v-b": "daz:b"}
+
+
+def test_delete_cascades_vectors(gens, catalog):
+    g = _build(gens)["id"]
+    gens.record_current(g, [("daz:a", "v-a", "ha")])
+    gens.delete(g)
+    assert gens.get(g) is None
+    assert connect(catalog).execute("SELECT COUNT(*) FROM asset_vectors").fetchone()[0] == 0
