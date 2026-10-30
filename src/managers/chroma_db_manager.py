@@ -206,6 +206,55 @@ class ChromaDbManager:
         """Returns the set of all document IDs currently stored in the collection."""
         return set(self.collection.get(include=[])["ids"])
 
+    def _bare_client(self):
+        """The client without opening (and so without creating) this manager's collection."""
+        if self._client is None:
+            try:
+                self._client = chromadb.PersistentClient(path=self.chroma_db_path)
+            except BaseException as e:
+                if _is_fatal(e):
+                    raise
+                self._forget_cached_system()
+                err = VectorStoreUnavailable(self.chroma_db_path, self.collection_name, e)
+                self.last_error = err.cause
+                raise err from e
+        return self._client
+
+    def exists(self) -> bool:
+        """Whether the collection exists, checked without creating it."""
+        names = {getattr(c, "name", c) for c in self._bare_client().list_collections()}
+        return self.collection_name in names
+
+    def delete_collection(self) -> None:
+        """Drops this manager's collection; a collection that does not exist is not an error."""
+        try:
+            self._bare_client().delete_collection(name=self.collection_name)
+        except VectorStoreUnavailable:
+            raise
+        except BaseException as e:
+            if _is_fatal(e):
+                raise
+            if not self.exists():
+                logger.debug(f"Collection {self.collection_name!r} did not exist; nothing to drop.")
+            else:
+                raise
+        self._collection = None
+        logger.info(f"Dropped ChromaDB collection {self.collection_name!r}.")
+
+    def get_dimension(self) -> Optional[int]:
+        """Dimension of the stored vectors, from one peeked embedding; None if empty."""
+        got = self.collection.get(limit=1, include=["embeddings"])
+        embeddings = got.get("embeddings")
+        if embeddings is None or len(embeddings) == 0:
+            return None
+        return len(embeddings[0])
+
+    def delete_ids(self, ids: List[str]) -> None:
+        """Deletes vectors by id; ids that are not stored are ignored."""
+        ids = list(ids)
+        if ids:
+            self.collection.delete(ids=ids)
+
     def reset_collection(self) -> None:
         """Deletes and recreates the default collection, leaving it empty and ready for a fresh index.
 
