@@ -242,3 +242,17 @@ def test_refresh_views_for_asset_without_sources_removes_view(store):
     store.refresh_views(["daz:2"], FIGS)
     assert store.get_by_sku("2") is None
     assert store.asset_ids_matching(artists=["Anna"]) == set()
+
+
+def test_mark_present_restores_only_absent_keys(store):
+    store.mark_absent("daz_cms", present_keys={"1"}, now="2024-05-01T00:00:00")
+    before = _record(store, "daz_cms", "2")
+    assert before["present"] == 0 and before["removed_at"] == "2024-05-01T00:00:00"
+    assert store.mark_present("daz_cms", ["1", "2", "nope"], now="2024-06-01T00:00:00") == ["daz:2"]
+    after = _record(store, "daz_cms", "2")
+    assert (after["present"], after["removed_at"], after["last_seen"]) == (1, None, "2024-06-01T00:00:00")
+    for col in ("payload", "payload_hash", "source_modified", "fetched_at"):
+        assert after[col] == before[col], col
+    # Already-present keys are untouched.
+    assert _record(store, "daz_cms", "1")["last_seen"] == "2024-01-02T00:00:00"
+    assert store.mark_present("daz_cms", []) == []

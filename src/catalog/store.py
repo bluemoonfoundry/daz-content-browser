@@ -118,6 +118,26 @@ class CatalogStore:
                 [(now, source, key) for key, _ in gone])
         return [asset_id for _, asset_id in gone]
 
+    def mark_present(self, source: str, keys: Iterable[str], now: Optional[str] = None) -> list:
+        """Mark currently-absent records of ``source`` present again; return their asset ids.
+
+        Only ``present``, ``removed_at`` and ``last_seen`` change; payload, hashes,
+        ``source_modified`` and ``fetched_at`` are kept for the caller to refresh.
+        """
+        now = now or _now()
+        keys = list(dict.fromkeys(str(k) for k in keys))
+        back = []
+        with self._conn() as conn:
+            for chunk in _chunks(keys):
+                back += [(r["source_key"], r["asset_id"]) for r in conn.execute(
+                    f"SELECT source_key, asset_id FROM source_records WHERE source = ?"
+                    f" AND present = 0 AND source_key IN ({','.join('?' * len(chunk))})",
+                    [source] + chunk)]
+            conn.executemany(
+                "UPDATE source_records SET present = 1, removed_at = NULL, last_seen = ?"
+                " WHERE source = ? AND source_key = ?", [(now, source, k) for k, _ in back])
+        return [asset_id for _, asset_id in back]
+
     def refresh_views(self, asset_ids: Iterable[str], figure_names: list) -> None:
         """Rebuild ``asset_view`` and lookup rows for ``asset_ids`` from their source records."""
         ids = list(dict.fromkeys(asset_ids))

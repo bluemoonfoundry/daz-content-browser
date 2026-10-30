@@ -307,3 +307,43 @@ def test_scrape_many_maps_empty_and_failed_scrapes_to_exceptions(monkeypatch):
     assert isinstance(out["boom"], Exception) and "network down" in str(out["boom"])
     assert len(progress) == 3
     assert pdm.scrape_many([], concurrency=2) == {}
+
+
+# --- fix round 1 -------------------------------------------------------------------------
+
+def _remove_b_then_relist_with_new_date(env):
+    reconcile_daz(env.catalog, [CMS_A, CMS_B], env.scrape, FIGS)
+    reconcile_daz(env.catalog, [CMS_A], env.scrape, FIGS)
+    assert env.catalog.get_by_sku("B")["installed"] == 0
+    env.scrape.calls.clear()
+    return [CMS_A, dict(CMS_B, last_modified_date="2027-01-01T00:00:00")]
+
+
+def test_reappeared_changed_key_deferred_by_limit_is_installed(env):
+    rows = _remove_b_then_relist_with_new_date(env)
+    r = reconcile_daz(env.catalog, rows, env.scrape, FIGS, limit=0)
+    assert (r.reappeared, r.changed, r.scraped) == (1, 0, 0) and "daz:B" in r.touched
+    assert env.catalog.get_by_sku("B")["installed"] == 1
+    # Still processed as changed on the next run, without counting reappeared again.
+    r2 = reconcile_daz(env.catalog, rows, env.scrape, FIGS)
+    assert (r2.reappeared, r2.changed, env.scrape.scraped) == (0, 1, ["B"])
+
+
+def test_reappeared_changed_key_installed_when_cancelled_before_first_batch(env):
+    rows = _remove_b_then_relist_with_new_date(env)
+    r = reconcile_daz(env.catalog, rows, env.scrape, FIGS, cancel_check=lambda: True)
+    assert (r.reappeared, r.changed, r.scraped) == (1, 0, 0)
+    assert env.scrape.calls == [] and env.catalog.get_by_sku("B")["installed"] == 1
+
+
+def test_empty_scrape_result_is_a_failed_fetch(env):
+    reconcile_daz(env.catalog, [CMS_A], env.scrape, FIGS)
+
+    def empty_scraper(skus):
+        env.scrape.calls.append(list(skus))
+        return {s: {} for s in skus}
+
+    r = reconcile_daz(env.catalog, [CMS_A], empty_scraper, FIGS, refetch_all=True)
+    assert (r.scraped, r.scrape_errors) == (0, 1)
+    assert env.catalog.get_by_sku("A")["url"] == web_payload("A")["url"]
+    assert _web_record(env.catalog, "A")["fetch_error"] == "no store data"

@@ -78,7 +78,14 @@ def reconcile_daz(catalog: CatalogStore, cms_rows: list,
     ``scrape(skus)`` returns ``{sku: web payload dict | Exception}``. ``limit`` caps how
     many new/changed SKUs are processed (the rest wait for a later run). ``refetch_all``
     re-scrapes every listed SKU; ``refetch_before=T`` re-scrapes listed SKUs whose store
-    data was never fetched or was fetched before ``T``.
+    data was never fetched or was fetched before ``T``; ``T`` must use the same UTC
+    ``isoformat()`` as ``fetched_at`` (the store's ``_now()``), because they are compared
+    as strings.
+
+    A reappeared SKU is marked present (installed) immediately, whatever ``limit`` or
+    ``cancel_check`` do; if its ``source_modified`` also changed it is then processed as
+    changed, now or on a later run. ``reappeared`` and ``refreshed_payloads`` (or
+    ``changed``) can therefore count the same SKU.
     """
     now = now or datetime.now(timezone.utc).isoformat()
     rows = _dedupe(cms_rows)
@@ -91,17 +98,20 @@ def reconcile_daz(catalog: CatalogStore, cms_rows: list,
     touched: list = []
     cms_writes: set = set()       # new/changed keys: CMS record written with their scrape
     cms_only: list = []           # keys whose CMS record is written without a scrape
+    reappeared: list = []         # absent keys listed again: marked present up front
     for sku, row in rows.items():
         known = cms_index.get(sku)
         if known is None:
             cms_writes.add(sku)
             continue
+        if not known["present"]:
+            reappeared.append(sku)
         if row.get("last_modified_date") != known["source_modified"]:
             cms_writes.add(sku)
         else:
             refreshed = payload_hash(row) != known["payload_hash"]
             result.refreshed_payloads += refreshed
-            if refreshed or not known["present"]:
+            if refreshed:
                 cms_only.append(sku)
 
     # ``limit`` caps new/changed keys; listing order decides which go first.
@@ -124,9 +134,11 @@ def reconcile_daz(catalog: CatalogStore, cms_rows: list,
     result.removed = len(removed)
     touched += removed
 
+    back = catalog.mark_present(CMS_SOURCE, reappeared, now=now)
+    result.reappeared = len(back)
+    touched += back
+
     for sku in cms_only:
-        if not cms_index[sku]["present"]:
-            result.reappeared += 1
         catalog.upsert_source(CMS_SOURCE, sku, _asset_id(sku), rows[sku],
                               rows[sku].get("last_modified_date"), now=now)
         touched.append(_asset_id(sku))
@@ -149,11 +161,11 @@ def reconcile_daz(catalog: CatalogStore, cms_rows: list,
                     result.new += 1
                 else:  # in cms_writes, so source_modified differs
                     result.changed += 1
-                    if not known["present"]:
-                        result.reappeared += 1
                 catalog.upsert_source(CMS_SOURCE, sku, asset_id, rows[sku],
                                       rows[sku].get("last_modified_date"), now=now)
             page = pages.get(sku, LookupError("no scrape result"))
+            if not isinstance(page, BaseException) and not page:
+                page = LookupError("no store data")  # never overwrite good data with {}
             if isinstance(page, BaseException):
                 result.scrape_errors += 1
                 catalog.upsert_source(WEB_SOURCE, sku, asset_id, {}, None,
