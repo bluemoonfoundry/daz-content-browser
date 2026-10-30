@@ -3,8 +3,8 @@ import threading
 
 import pytest
 
-from src.catalog import schema
-from src.catalog.schema import LATEST_VERSION, MigrationFailed, connect, migrate
+from catalog import schema
+from catalog.schema import LATEST_VERSION, MigrationFailed, connect, migrate
 
 
 def test_migrate_fresh_db_reaches_latest(tmp_path):

@@ -1,5 +1,5 @@
-from src.catalog import documents
-from src.catalog.documents import (build_view_row, doc_hash, determine_compatibility,
+from catalog import documents
+from catalog.documents import (build_view_row, doc_hash, determine_compatibility,
                                    load_figure_names, payload_hash)
 
 CMS = {"sku": "12345", "product_name": "Desert Robe for Genesis 8", "artists": "Ann, Bo",
