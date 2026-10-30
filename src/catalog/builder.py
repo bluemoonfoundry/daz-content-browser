@@ -34,18 +34,13 @@ def _batch_size_default() -> int:
 
 
 def _metadata(row: dict, gen_id: int) -> dict:
-    # Display fields only: filtering (artist, tags, category, figures) goes through ids=
-    # resolved from the catalog's exact lookups, not Chroma metadata.
+    # Identity only: results and filters come from the catalog (filtering goes through ids=
+    # resolved from exact lookups), so no display field can go stale in the vector store.
     return {
         "asset_id": row["asset_id"],
         "generation_id": gen_id,
         "doc_hash": row["doc_hash"] or "",
         "sku": row["sku"] or "",
-        "url": row["url"] or "",
-        "image_url": row["image_url"] or "",
-        "name": row["name"] or "",
-        "subcategories": row["subcategories"] or "",
-        "asset_count": row["asset_count"] or 0,
     }
 
 

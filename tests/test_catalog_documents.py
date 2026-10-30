@@ -75,11 +75,12 @@ def test_list_split_dedupes_and_drops_empties():
     assert r["artists_list"] == ["Ann", "Bo"]
 
 
-def test_doc_hash_changes_with_text_and_metadata_but_not_price():
+def test_doc_hash_covers_only_the_embedding_text():
     a = build_view_row("daz:1", CMS, WEB, FIGS)
-    assert doc_hash(a) == doc_hash(dict(a, price="$1"))
+    for change in (dict(price="$1"), dict(name="Other"), dict(category="X"),
+                   dict(subcategories="Y"), dict(tags="a,b")):
+        assert doc_hash(a) == doc_hash(dict(a, **change))
     assert doc_hash(a) != doc_hash(dict(a, embedding_text=a["embedding_text"] + "x"))
-    assert doc_hash(a) != doc_hash(dict(a, name="Other"))
 
 
 def test_doc_hash_depends_on_format_version(monkeypatch):

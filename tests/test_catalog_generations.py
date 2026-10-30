@@ -222,3 +222,33 @@ def test_reset_error_attempts(gens, catalog):
     assert gens.pending(g) == []
     assert gens.reset_error_attempts(g) == 1
     assert gens.pending(g) == ["daz:b"]
+
+
+def test_migration_3_rehashes_and_keeps_current_vectors_current(tmp_path):
+    from catalog.documents import doc_hash
+    from catalog.schema import migrate
+    path = str(tmp_path / "m3.db")
+    CatalogStore(path)
+    g = GenerationStore(path)
+    conn = connect(path)
+    for aid, text in (("daz:1", "text one"), ("daz:2", "text two")):
+        conn.execute("INSERT INTO assets (asset_id, sku, created_at) VALUES (?, NULL, 'x')", (aid,))
+        conn.execute("INSERT INTO asset_view (asset_id, installed, doc_hash, doc_format_version,"
+                     " embedding_text) VALUES (?, 1, ?, 1, ?)", (aid, "old-" + aid, text))
+    conn.execute("PRAGMA user_version = 2")  # as if at v2 with old-formula hashes
+    conn.commit()
+    conn.close()
+    gen = g.adopt("c", "m", 4, 1, 2, [("daz:1", "daz:1", "old-daz:1"), ("daz:2", "daz:2", "old-daz:2")])
+    # daz:2's vector was stale even under the old formula
+    conn = connect(path)
+    conn.execute("UPDATE asset_vectors SET doc_hash = 'older' WHERE asset_id = 'daz:2'")
+    conn.commit()
+    conn.close()
+    before = g.vector_totals(gen["id"])
+    assert migrate(path) == 3
+    after = g.vector_totals(gen["id"])
+    assert after["current"] == before["current"]
+    assert g.pending(gen["id"]) == ["daz:2"]
+    views = {r["asset_id"]: r["doc_hash"] for r in _q(path, "SELECT asset_id, doc_hash FROM asset_view")}
+    assert views == {a: doc_hash({"embedding_text": t})
+                     for a, t in (("daz:1", "text one"), ("daz:2", "text two"))}

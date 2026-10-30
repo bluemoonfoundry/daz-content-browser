@@ -16,9 +16,6 @@ logger = logging.getLogger(__name__)
 
 DOC_FORMAT_VERSION = 1
 
-_HASH_FIELDS = ("name", "artist", "category", "subcategories", "compatible_figures",
-                "tags", "asset_count", "url", "image_url")
-
 
 def load_figure_names() -> list:
     """Load the canonical figure names from ``.figures.json`` (frozen-aware)."""
@@ -230,10 +227,12 @@ def build_view_row(asset_id: str, cms, web, figure_names: list) -> dict:
 
 
 def doc_hash(row: dict) -> str:
-    """sha256 over the format version, embedding text and vector-side metadata."""
+    """sha256 over the format version and the embedding text only.
+
+    A vector is stale exactly when the text it was embedded from changed; display and
+    filter fields are read from the catalog, never from the vector store.
+    """
     material = {"v": DOC_FORMAT_VERSION, "embedding_text": row.get("embedding_text")}
-    for k in _HASH_FIELDS:
-        material[k] = row.get(k)
     blob = json.dumps(material, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 

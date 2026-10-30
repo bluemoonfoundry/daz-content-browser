@@ -123,9 +123,8 @@ def test_embed_pending_replaces_adopted_sku_ids(adopted):
     meta = got["metadatas"][0]
     assert meta["asset_id"] == "daz:1" and meta["generation_id"] == gen["id"]
     assert meta["doc_hash"] == env.catalog.get_rows(["daz:1"])[0]["doc_hash"]
-    assert meta["name"] == "Renamed" and meta["sku"] == "1"
-    for filter_field in ("artist", "tags", "category", "compatible_figures"):
-        assert filter_field not in meta
+    assert meta["sku"] == "1"
+    assert set(meta) == {"asset_id", "generation_id", "doc_hash", "sku"}
     assert got["documents"][0] == env.catalog.get_rows(["daz:1"])[0]["embedding_text"]
 
 

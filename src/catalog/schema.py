@@ -363,9 +363,25 @@ def _migration_2(conn: sqlite3.Connection, ctx: MigrationContext) -> None:
     logger.info("Imported %d legacy products; renamed %r to %r", len(rows), table, LEGACY_RENAMED)
 
 
+def _migration_3(conn: sqlite3.Connection, ctx: MigrationContext) -> None:
+    """The doc hash covers only the embedding text now (it used to include display and
+    filter fields). Rehash every view row and carry vectors that are current under the old
+    hash (error rows' last-attempted hash too) over to the new one, so nothing is re-embedded
+    just because the formula changed."""
+    rows = conn.execute("SELECT asset_id, doc_hash, embedding_text FROM asset_view").fetchall()
+    changes = [(doc_hash({"embedding_text": r["embedding_text"]}), r["asset_id"], r["doc_hash"])
+               for r in rows]
+    changes = [c for c in changes if c[0] != c[2]]
+    conn.executemany(
+        "UPDATE asset_vectors SET doc_hash = ? WHERE asset_id = ? AND doc_hash = ?", changes)
+    conn.executemany(
+        "UPDATE asset_view SET doc_hash = ? WHERE asset_id = ? AND doc_hash = ?", changes)
+
+
 _MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection, MigrationContext], None]]] = [
     (1, _migration_1),
     (2, _migration_2),
+    (3, _migration_3),
 ]
 LATEST_VERSION = _MIGRATIONS[-1][0]
 
