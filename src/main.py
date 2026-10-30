@@ -110,17 +110,37 @@ def _run_index_job(kind: str, params: dict) -> None:
         sys.exit(1)
 
 
+def load_job(args) -> tuple:
+    """The job `vab load` runs: an incremental index, or with --force a refetching rebuild."""
+    if args.force:
+        params = {"refetch": True}
+        if args.model:
+            params["model"] = args.model
+        return "rebuild", params
+    params = {"all": args.all, "phase": args.phase, "limit": args.limit}
+    if args.model:
+        params["model"] = args.model
+    return "index", params
+
+
+def index_job(args) -> tuple:
+    """The job `vab index rebuild|repair` runs."""
+    if args.index_command == "rebuild":
+        params = {"refetch": args.refetch}
+        if args.model:
+            params["model"] = args.model
+        return "rebuild", params
+    return "repair", {}
+
+
 def load_command(args):
-    """Loads data from DAZ Postgres to SQLite and ChromaDB."""
-    _run_index_job("index", {"force": args.force, "all": args.all, "phase": args.phase, "limit": args.limit})
+    """Reconciles the DAZ CMS into the catalog and embeds into the live index."""
+    _run_index_job(*load_job(args))
 
 
 def index_command(args):
-    """`vab index rebuild|repair` — the explicit recovery paths."""
-    if args.index_command == "rebuild":
-        _run_index_job("index", {"force": True})
-    elif args.index_command == "repair":
-        _run_index_job("repair", {})
+    """`vab index rebuild|repair` — the explicit rebuild and recovery paths."""
+    _run_index_job(*index_job(args))
 
 
 def worker_command(args):
@@ -331,7 +351,9 @@ def main():
             "stats", help="Display stats about the ChromaDB collection."
         ),
         "server": subparsers.add_parser("server", help="Run the FastAPI web server."),
-        "load": subparsers.add_parser("load", help="Load data from DAZ Postgres to SQLite and ChromaDB."),
+        "load": subparsers.add_parser(
+            "load", help="Bring the index up to date with the DAZ CMS (adds, edits, removals) and embed changes."
+        ),
         "openproduct": subparsers.add_parser(
             "openproduct",
             help="Open a named DAZ product in DAZ Studio's Content Library Pane",
@@ -341,9 +363,22 @@ def main():
 
     index_parser = subparsers.add_parser("index", help="Rebuild or repair the product index.")
     index_subparsers = index_parser.add_subparsers(dest="index_command", required=True)
-    index_subparsers.add_parser("rebuild", help="Wipe SQLite and ChromaDB and re-index everything (same as load --force).")
+    index_rebuild = index_subparsers.add_parser(
+        "rebuild",
+        help="Rebuild the vectors from SQLite into a new index generation beside the live one, then "
+             "switch over. An interrupted rebuild resumes when run again.",
+    )
+    index_rebuild.add_argument(
+        "--refetch", action="store_true",
+        help="First re-fetch every product's store data (same as load --force). SQLite is never deleted.",
+    )
+    index_rebuild.add_argument(
+        "--model", default=None, metavar="MODEL_ID",
+        help="Embedding model for the new generation (default: the configured model).",
+    )
     index_subparsers.add_parser(
-        "repair", help="Reset the product vector store (quarantining it if it won't open) and re-embed from SQLite."
+        "repair", help="Quarantine the vector store if it won't open, then rebuild the index from SQLite "
+                       "beside the live one."
     )
     index_parser.set_defaults(func=index_command)
 
@@ -418,10 +453,19 @@ def main():
              "Defaults to BAAI/bge-large-en-v1.5.",
     )
 
-    parsers["load"].add_argument('--force', action='store_true', help="Force a complete rebuild of the SQLite database (implies --all).")
-    parsers["load"].add_argument('--all', action='store_true', help="Process all products from Postgres, not just new ones.")
-    parsers["load"].add_argument('--limit', type=int, help="Process only a limited number of products. Ideal for testing.")
-    parsers["load"].add_argument('--phase', type=str, choices=['test', 'etl', 'embed', 'all'], default='all', help="Run only a specific phase: 'etl', 'embed', or both if omitted.")
+    parsers["load"].add_argument(
+        '--force', action='store_true',
+        help="Re-fetch every product's store data and build a new index generation beside the live one "
+             "(same as `index rebuild --refetch`). Does NOT delete SQLite; an interrupted run resumes.",
+    )
+    parsers["load"].add_argument('--all', action='store_true', help="Re-fetch store data for every listed product, not just new or changed ones.")
+    parsers["load"].add_argument('--limit', type=int, help="Process at most this many new/changed products (and embed at most this many). Ideal for testing.")
+    parsers["load"].add_argument('--phase', type=str, choices=['etl', 'embed', 'all'], default='all', help="Run only a specific phase: 'etl' (reconcile the DAZ CMS), 'embed', or both if omitted.")
+    parsers["load"].add_argument(
+        '--model', default=None, metavar="MODEL_ID",
+        help="Embedding model for the first index generation (or for --force's new generation). An "
+             "existing index keeps its model; switch with `vab index rebuild --model`.",
+    )
 
 
     parsers["openproduct"].add_argument(

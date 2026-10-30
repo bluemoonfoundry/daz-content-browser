@@ -1,9 +1,7 @@
 """Recoverable indexing: the persisted job store, the index worker (in-process and as a
 real subprocess), a degraded vector store, and the API's job endpoints."""
 import os
-import sys
 import time
-import types
 
 import numpy as np
 import pytest
@@ -181,31 +179,41 @@ def test_lost_lease_stops_job_without_recording(store):
 
 
 @pytest.fixture
-def fake_etl(monkeypatch):
+def recorded_handlers(monkeypatch):
     calls = []
 
-    def main(args, on_progress=None, cancel_check=None):
-        calls.append(args)
-        on_progress("embed", 1, 2, "batch 1")
+    def handler(ctx):
+        calls.append((ctx.job["kind"], ctx.job["attempt"], dict(ctx.params)))
+        return "ok"
 
-    monkeypatch.setitem(sys.modules, "managers.postgres_db_manager", types.SimpleNamespace(main=main))
+    for kind in ("index", "rebuild", "repair"):
+        monkeypatch.setitem(index_worker.HANDLERS, kind, handler)
     return calls
 
 
-def test_index_job_passes_params(store, fake_etl):
-    job = _claimed(store, "index", {"force": True, "phase": "all"})
-    assert run_job(store, job, "w1") == SUCCEEDED
-    assert fake_etl[0].force is True
-
-
-def test_index_retry_resumes_instead_of_rewiping(store, fake_etl):
-    job = store.enqueue("index", {"force": True})
+def test_rebuild_retry_keeps_its_params(store, recorded_handlers):
+    # A retry after a crash re-runs the same rebuild: the building generation (and its
+    # refetch_started_at marker) makes it resume instead of starting over.
+    job = store.enqueue("rebuild", {"refetch": True})
     store.claim("w1")
     _expire_lease(store, job["id"])
     store.recover_stale()
     retry = store.claim("w2")
     assert run_job(store, retry, "w2") == SUCCEEDED
-    assert fake_etl[0].force is False
+    assert recorded_handlers == [("rebuild", 2, {"refetch": True})]
+
+
+def test_keyboard_interrupt_records_resume_hint(store, monkeypatch):
+    def interrupted(ctx):
+        raise KeyboardInterrupt
+
+    monkeypatch.setitem(index_worker.HANDLERS, "rebuild", interrupted)
+    job = _claimed(store, "rebuild", {"refetch": False})
+    with pytest.raises(KeyboardInterrupt):
+        run_job(store, job, "w1")
+    done = store.get(job["id"])
+    assert done["status"] == CANCELLED
+    assert done["progress"] == "Interrupted — run the same command again to resume."
 
 
 # ── Worker, as a real subprocess ──────────────────────────────────────────────
@@ -350,6 +358,21 @@ def test_api_update_lifecycle(prod):
     assert client.delete("/api/v1/update").json()["status"] == CANCELLED
     status = client.get("/api/v1/update/status").json()
     assert status["running"] is False and status["status"] == CANCELLED
+
+
+@pytest.mark.parametrize("body, kind, params", [
+    ({"mode": "update"}, "index", {}),
+    ({}, "index", {}),
+    ({"mode": "rebuild"}, "rebuild", {"refetch": False}),
+    ({"force": True}, "rebuild", {"refetch": True}),
+    ({"mode": "repair"}, "repair", {}),
+])
+def test_api_update_modes_map_to_kinds(prod, body, kind, params):
+    client = TestClient(prod.app, base_url=BASE, headers=AUTH)
+    r = client.post("/api/v1/update", json=body)
+    assert r.status_code == 202
+    job = prod.job_store.get(r.json()["task_id"])
+    assert (job["kind"], job["params"]) == (kind, params)
 
 
 def test_api_update_spawn_failure_does_not_wedge_the_queue(prod, monkeypatch):

@@ -271,8 +271,10 @@ def create_session(request: Request, response: Response):
 # ── Request models ─────────────────────────────────────────────────────────────
 
 class UpdateRequest(BaseModel):
-    """`mode`: update (incremental), rebuild (wipe and re-index), or repair (reset the vector
-    store and re-embed from SQLite). `force: true` is the legacy spelling of rebuild."""
+    """`mode`: update (incremental), rebuild (new index generation from SQLite, built beside
+    the live one), or repair (quarantine an unopenable store, then rebuild from SQLite).
+    `force: true` with no mode re-fetches every product's store data, then rebuilds; it
+    never deletes SQLite."""
     force: bool = False
     mode: Optional[Literal["update", "rebuild", "repair"]] = None
 
@@ -419,8 +421,16 @@ def start_update(body: UpdateRequest = UpdateRequest()):
     if APP_MODE == "demo":
         raise HTTPException(status_code=403, detail="Update functionality is disabled in demo mode.")
 
-    mode = body.mode or ("rebuild" if body.force else "update")
-    kind, params = ("repair", {}) if mode == "repair" else ("index", {"force": mode == "rebuild"})
+    if body.mode is None and body.force:
+        # Legacy spelling: re-fetch every product's store data, then build a new generation.
+        mode, kind, params = "rebuild", "rebuild", {"refetch": True}
+    else:
+        mode = body.mode or "update"
+        kind, params = {
+            "update": ("index", {}),
+            "rebuild": ("rebuild", {"refetch": False}),  # new generation from SQLite
+            "repair": ("repair", {}),
+        }[mode]
     try:
         job = job_store.enqueue(kind, params, source="api")
     except JobConflict as e:

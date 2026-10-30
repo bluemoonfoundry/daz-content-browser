@@ -121,6 +121,7 @@ def reconcile_daz(catalog: CatalogStore, cms_rows: list,
     deferred = cms_writes.difference(ordered)  # left for a later run: write nothing now
     cms_writes = set(ordered)
     to_scrape = list(ordered)
+    already_fresh: list = []      # refetched by an earlier, interrupted run of this refetch
     if refetch_all or refetch_before is not None:
         web_index = catalog.source_index(WEB_SOURCE)
         for sku in rows:
@@ -129,6 +130,8 @@ def reconcile_daz(catalog: CatalogStore, cms_rows: list,
             fetched = (web_index.get(sku) or {}).get("fetched_at")
             if refetch_all or fetched is None or fetched < refetch_before:
                 to_scrape.append(sku)
+            else:
+                already_fresh.append(_asset_id(sku))
 
     removed = catalog.mark_absent(CMS_SOURCE, set(rows), now=now)
     result.removed = len(removed)
@@ -142,6 +145,12 @@ def reconcile_daz(catalog: CatalogStore, cms_rows: list,
         catalog.upsert_source(CMS_SOURCE, sku, _asset_id(sku), rows[sku],
                               rows[sku].get("last_modified_date"), now=now)
         touched.append(_asset_id(sku))
+
+    # Views are refreshed as their sources are written (then per scrape batch), so an
+    # interrupted run leaves at most one batch with stale views. A resumed refetch also
+    # refreshes what the interrupted run already re-fetched: those SKUs aren't scraped
+    # again, so this is their only chance to reach the view.
+    catalog.refresh_views(touched + already_fresh, figure_names)
 
     for i in range(0, len(to_scrape), SCRAPE_BATCH):
         if cancel_check and cancel_check():
@@ -174,9 +183,9 @@ def reconcile_daz(catalog: CatalogStore, cms_rows: list,
                 result.scraped += 1
                 catalog.upsert_source(WEB_SOURCE, sku, asset_id, page, None, now=now)
             touched.append(asset_id)
+        catalog.refresh_views([_asset_id(sku) for sku in batch], figure_names)
 
     result.touched = list(dict.fromkeys(touched))
-    catalog.refresh_views(result.touched, figure_names)
     logger.info("Reconciled DAZ CMS: %d new, %d changed, %d removed, %d reappeared, "
                 "%d refreshed, %d scraped, %d scrape errors", result.new, result.changed,
                 result.removed, result.reappeared, result.refreshed_payloads,

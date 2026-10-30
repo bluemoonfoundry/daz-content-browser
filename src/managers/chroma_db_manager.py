@@ -41,6 +41,45 @@ def _is_fatal(exc: BaseException) -> bool:
     # so "catch Exception" misses exactly the corruption failures we care about.
     return isinstance(exc, (KeyboardInterrupt, SystemExit, GeneratorExit))
 
+def _forget_cached_system(chroma_db_path: str) -> None:
+    # chromadb caches one System per persist directory and registers it *before*
+    # starting it, so a failed open leaves a half-started System behind that every
+    # later open for this path reuses. Drop it so the next attempt (e.g. after a
+    # repair) starts clean.
+    try:
+        from chromadb.api.shared_system_client import SharedSystemClient
+        SharedSystemClient._identifier_to_system.pop(str(chroma_db_path), None)
+    except Exception:
+        logger.debug("Could not evict chromadb's cached System.", exc_info=True)
+
+
+def store_open_error(chroma_db_path: str) -> Optional[str]:
+    """Why the store at ``chroma_db_path`` cannot be opened at all, or None if it opens.
+
+    Opens the client and lists collections without creating or touching any collection.
+    """
+    try:
+        chromadb.PersistentClient(path=chroma_db_path).list_collections()
+    except BaseException as e:
+        if _is_fatal(e):
+            raise
+        _forget_cached_system(chroma_db_path)
+        return f"{type(e).__name__}: {e}"
+    return None
+
+
+def quarantine_store(chroma_db_path: str, reason: str = "") -> str:
+    """Renames an unopenable store directory aside (never deletes it); returns the new path.
+
+    Everything in the store (every collection, e.g. 'morphs') moves with it.
+    """
+    quarantine = f"{chroma_db_path}.corrupt-{time.strftime('%Y%m%d-%H%M%S')}"
+    logger.warning(f"Store will not open ({reason}); moving it to {quarantine!r}.")
+    _forget_cached_system(chroma_db_path)
+    os.rename(chroma_db_path, quarantine)
+    return quarantine
+
+
 def build_where_clause(
     tags: Optional[List[str]] = None,
     artists: Optional[List[str]] = None,
@@ -131,15 +170,7 @@ class ChromaDbManager:
         logger.info(f"ChromaDB opened — path: {self.chroma_db_path!r}, collection: {self.collection_name!r}")
 
     def _forget_cached_system(self) -> None:
-        # chromadb caches one System per persist directory and registers it *before*
-        # starting it, so a failed open leaves a half-started System behind that every
-        # later open for this path reuses. Drop it so the next attempt (e.g. after a
-        # repair) starts clean.
-        try:
-            from chromadb.api.shared_system_client import SharedSystemClient
-            SharedSystemClient._identifier_to_system.pop(str(self.chroma_db_path), None)
-        except Exception:
-            logger.debug("Could not evict chromadb's cached System.", exc_info=True)
+        _forget_cached_system(self.chroma_db_path)
 
     @property
     def client(self):
@@ -286,10 +317,8 @@ class ChromaDbManager:
         except VectorStoreUnavailable as e:
             if not os.path.exists(self.chroma_db_path):
                 raise
-            quarantine = f"{self.chroma_db_path}.corrupt-{time.strftime('%Y%m%d-%H%M%S')}"
-            logger.warning(f"Store will not open ({e.cause}); moving it to {quarantine!r}.")
             self._client = self._collection = None
-            os.rename(self.chroma_db_path, quarantine)
+            quarantine = quarantine_store(self.chroma_db_path, e.cause)
             self._open()
             return (f"Store could not be opened; moved it to {quarantine!r} and created a fresh one. "
                     "Other collections in it (e.g. morphs) must be re-indexed.")

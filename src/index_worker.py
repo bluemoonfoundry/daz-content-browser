@@ -3,12 +3,12 @@
 The API never indexes in-process: it queues a job and spawns `vab worker --drain`, a
 detached process that claims the job, renews its lease while working, and records the
 outcome. Restarting or killing the API leaves the worker running; killing the worker
-lets its lease lapse so the job is recovered and retried. `vab load` and
+lets its lease lapse so the job is recovered and retried (a rebuild resumes its building
+generation). `vab load` and
 `vab index repair|rebuild` run their job inline through the same queue, so the CLI and
 the API can never index at the same time.
 """
 
-import argparse
 import logging
 import os
 import subprocess
@@ -74,39 +74,216 @@ class JobContext:
 # Imported lazily so the worker (and the selftest) don't load ChromaDB, the embedding
 # model, or PostgreSQL until a job actually needs them.
 
-def run_index_job(ctx: JobContext) -> str:
-    """ETL + embed. params: force, all, phase, limit."""
-    from managers.postgres_db_manager import main as run_daz_load
+_CMS_UNAVAILABLE = (
+    "DAZ CMS PostgreSQL is not available — check DB_NAME, DB_USER, DB_PASS, DB_HOST and "
+    "DB_PORT (or the CMS connection in Settings) and that DAZ Studio's CMS is running."
+)
+_RESUME_HINT = "The new generation is kept; resume with `vab index rebuild`."
+# embed_pending takes one snapshot per call; a rebuild makes up to this many passes so
+# failed batches are retried within their budget (GenerationStore.pending's max_attempts).
+_EMBED_PASSES = 3
 
+
+def _managers():
+    from managers import managers
+    return managers
+
+
+def _figure_names() -> list:
+    from catalog.documents import load_figure_names
+    return load_figure_names()
+
+
+def _scraper(ctx: JobContext) -> Callable[[list], dict]:
+    """The store scraper the reconciler calls per batch of SKUs."""
+    from managers.postgres_db_manager import scrape_many
+
+    concurrency = int(os.getenv("ETL_SCRAPE_CONCURRENCY", "10"))
+
+    def progress(stage, current, total, detail=""):
+        ctx.on_progress("etl", current, total, str(detail))
+
+    def scrape(skus: list) -> dict:
+        return scrape_many(skus, concurrency=concurrency, on_progress=progress)
+    return scrape
+
+
+def _check_migrated() -> None:
+    error = _managers().catalog.migration_error
+    if error:
+        raise RuntimeError(error)
+
+
+def _prepare() -> None:
+    """Refuses to run on an unmigrated catalog; adopts a legacy index; drops retired ones."""
+    from catalog.model_config import configured_model_id
+
+    _check_migrated()
+    m = _managers()
+    m.builder.adopt_legacy(configured_model_id())
+    m.builder.cleanup_retired()
+
+
+def _reconcile(ctx: JobContext, **kwargs):
+    from catalog.reconcile import reconcile_daz
+
+    m = _managers()
+    if m.daz_pg_analyzer is None:
+        raise RuntimeError(_CMS_UNAVAILABLE)
+    ctx.report("etl", "Reading the DAZ CMS product list…")
+    cms_rows = m.daz_pg_analyzer.get_all_products()
+    return reconcile_daz(m.catalog, cms_rows, _scraper(ctx), _figure_names(),
+                         cancel_check=ctx.cancelled, **kwargs)
+
+
+def _reconcile_summary(r) -> str:
+    return (f"{r.new} new, {r.changed} changed, {r.removed} removed, {r.reappeared} reappeared, "
+            f"{r.refreshed_payloads} refreshed, {r.scraped} scraped, {r.scrape_errors} scrape errors")
+
+
+def _embed_summary(e: dict) -> str:
+    return (f"{e['embedded']} embedded, {e['errors']} embed errors, "
+            f"{e['orphans_removed']} orphans removed")
+
+
+def _check_cancel(ctx: JobContext, gen: dict) -> None:
+    """At a rebuild checkpoint: an explicit cancel discards the building generation.
+
+    A lost lease means another worker recovered the job and may be resuming the same
+    generation, so it is left alone (stopping is enough).
+    """
+    if not ctx.cancelled():
+        return
+    if not ctx.lease_lost.is_set():
+        _managers().builder.discard(gen, "cancelled")
+    raise JobCancelled()
+
+
+def _embed_all(ctx: JobContext, gen: dict) -> dict:
+    """Embeds ``gen`` until nothing is pending or the retry budget is spent."""
+    m = _managers()
+    totals = {"embedded": 0, "errors": 0, "orphans_removed": 0}
+    for _ in range(_EMBED_PASSES):
+        result = m.builder.embed_pending(gen, cancel_check=ctx.cancelled,
+                                         on_progress=ctx.on_progress)
+        totals["embedded"] += result["embedded"]
+        totals["orphans_removed"] += result["orphans_removed"]
+        totals["errors"] = result["errors"]  # failures still outstanding after this pass
+        _check_cancel(ctx, gen)
+        if not m.generations.pending(gen["id"]):
+            break
+    return totals
+
+
+def _rebuild(ctx: JobContext, model_id: str, refetch: bool) -> str:
+    """Builds (or resumes) a generation for ``model_id`` beside the active one, then promotes it.
+
+    ``KeyboardInterrupt`` and crashes are not caught: the building generation survives
+    and the next rebuild for the same model resumes it.
+    """
+    from catalog.builder import RebuildIncomplete
+
+    m = _managers()
+    if refetch and m.daz_pg_analyzer is None:
+        raise RuntimeError(_CMS_UNAVAILABLE)  # before creating a generation it can't finish
+    ctx.report("rebuild", f"Preparing a new index generation for {model_id}…")
+    gen = m.builder.start_or_resume_rebuild(model_id, refetch=refetch)
+    _check_cancel(ctx, gen)
+    parts = []
+    if refetch:
+        # A resumed generation that was started without refetch has no marker: anything
+        # fetched before it was created counts as not yet refreshed.
+        marker = gen["refetch_started_at"] or gen["created_at"]
+        parts.append(_reconcile_summary(_reconcile(ctx, refetch_before=marker)))
+        _check_cancel(ctx, gen)
+    parts.append(_embed_summary(_embed_all(ctx, gen)))
+    remaining = m.generations.pending(gen["id"])
+    if remaining:
+        raise RuntimeError(f"Generation {gen['id']} still has {len(remaining)} pending "
+                           f"asset(s) after this run. {_RESUME_HINT}")
+    try:
+        m.builder.finish_rebuild(gen)
+    except RebuildIncomplete as e:
+        raise RuntimeError(f"{e} {_RESUME_HINT}") from e
+    return f"Generation {gen['id']} ({model_id}) promoted: " + "; ".join(parts) + "."
+
+
+def run_index_job(ctx: JobContext) -> str:
+    """Incremental run: reconcile the DAZ CMS, then embed into the active generation.
+
+    params: all, phase (etl|embed|all), limit, model. ``model`` only picks the model of the
+    first generation; with an active generation its own model is always used (rebuilds are
+    never started automatically). Cancelling just stops: partial work stays and the
+    active generation is untouched.
+    """
+    from catalog.model_config import configured_model_id
+
+    _prepare()
+    m = _managers()
     p = ctx.params
-    # A retry after a crash resumes incrementally: re-running --force would wipe the
-    # partial progress the failed attempt already made.
-    resume = ctx.job["attempt"] > 1
-    args = argparse.Namespace(
-        force=bool(p.get("force")) and not resume,
-        all=bool(p.get("all")),
-        phase=p.get("phase", "all"),
-        limit=p.get("limit"),
-    )
-    if resume and p.get("force"):
-        ctx.report("start", "Resuming the interrupted rebuild incrementally…")
-    run_daz_load(args, on_progress=ctx.on_progress, cancel_check=ctx.cancelled)
-    return "Update process finished successfully."
+    phase = p.get("phase") or "all"
+    limit = p.get("limit")
+    parts = []
+    if phase != "embed":
+        parts.append(_reconcile_summary(
+            _reconcile(ctx, refetch_all=bool(p.get("all")), limit=limit)))
+        if ctx.cancelled():
+            raise JobCancelled()
+    if phase != "etl":
+        active = m.generations.active()
+        if active is None:
+            parts.append(_rebuild(ctx, p.get("model") or configured_model_id(), refetch=False))
+        else:
+            if p.get("model") and p["model"] != active["model_id"]:
+                logger.warning("The active generation uses %s, not %s; embedding with %s. Run "
+                               "`vab index rebuild --model %s` to switch models.",
+                               active["model_id"], p["model"], active["model_id"], p["model"])
+            embedded = m.builder.embed_pending(active, cancel_check=ctx.cancelled,
+                                               on_progress=ctx.on_progress, limit=limit)
+            if ctx.cancelled():
+                raise JobCancelled()
+            parts.append(_embed_summary(embedded))
+    return "Index updated: " + "; ".join(parts) + "."
+
+
+def run_rebuild_job(ctx: JobContext) -> str:
+    """New generation from SQLite (re-fetching store data first if ``refetch``), then promote.
+
+    params: refetch, model.
+    """
+    from catalog.model_config import configured_model_id
+
+    _prepare()
+    p = ctx.params
+    return _rebuild(ctx, p.get("model") or configured_model_id(), refetch=bool(p.get("refetch")))
 
 
 def run_repair_job(ctx: JobContext) -> str:
-    """Resets (or quarantines) the product vector store, then re-embeds from SQLite."""
-    from managers.managers import chroma_db_manager
-    from managers.postgres_db_manager import main as run_daz_load
+    """Quarantines a store that won't open at all, then rebuilds from SQLite and promotes.
 
-    ctx.report("repair", "Resetting the vector store…")
-    action = chroma_db_manager.repair()
-    logger.info(action)
+    Never resets or deletes a collection a generation references: the old active one keeps
+    serving until the new generation replaces it, and is then cleaned up as retired.
+    """
+    from catalog.model_config import configured_model_id
+    from managers.chroma_db_manager import quarantine_store, store_open_error
+
+    _check_migrated()
+    m = _managers()
+    action = "The vector store opened; rebuilt the index beside it."
+    chroma_path = m.builder.chroma_path
+    if os.path.exists(chroma_path):
+        error = store_open_error(chroma_path)
+        if error is not None:
+            ctx.report("repair", "The vector store will not open; quarantining it…")
+            moved = quarantine_store(chroma_path, error)
+            action = (f"The vector store could not be opened; moved it to {moved!r}. Other "
+                      "collections in it (e.g. morphs) must be re-indexed.")
+    _prepare()
     if ctx.cancelled():
         raise JobCancelled()
-    args = argparse.Namespace(force=False, all=False, phase="embed", limit=None)
-    run_daz_load(args, on_progress=ctx.on_progress, cancel_check=ctx.cancelled)
-    return f"Repair finished. {action}"
+    active = m.generations.active()
+    model_id = active["model_id"] if active else configured_model_id()
+    return f"Repair finished. {action} " + _rebuild(ctx, model_id, refetch=False)
 
 
 def run_selftest_job(ctx: JobContext) -> str:
@@ -125,6 +302,7 @@ def run_selftest_job(ctx: JobContext) -> str:
 
 HANDLERS: dict[str, Callable[[JobContext], str]] = {
     "index": run_index_job,
+    "rebuild": run_rebuild_job,
     "repair": run_repair_job,
     "selftest": run_selftest_job,
 }
@@ -168,9 +346,12 @@ def run_job(store: JobStore, job: dict, worker_id: str,
         status, progress = CANCELLED, "Indexing cancelled."
     except KeyboardInterrupt:
         # Ctrl+C on an inline CLI run is a cancellation, not a crash to be retried later.
+        # Handlers never catch it, so a building generation survives and the same
+        # command resumes it.
         stop.set()
         beat.join()
-        store.finish(job["id"], worker_id, CANCELLED, "Interrupted.")
+        store.finish(job["id"], worker_id, CANCELLED,
+                     "Interrupted — run the same command again to resume.")
         raise
     except Exception as e:
         logger.exception(f"Job {job['id']} ({job['kind']}) failed.")
