@@ -239,6 +239,20 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> set:
     return {r[1] for r in conn.execute(f"PRAGMA table_info({_quote(table)})")}
 
 
+_CATALOG_TABLES = {"assets", "source_records", "asset_view", "artists", "asset_artists", "tags",
+                   "asset_tags", "figures", "asset_figures", "index_generations",
+                   "asset_vectors", "sqlite_sequence"}
+_LEGACY_SIGNATURE = {"sku", "embedding_text", "enriched_at"}
+
+
+def _legacy_shaped_tables(conn: sqlite3.Connection) -> list:
+    """Non-catalog tables (other than products_legacy) that look like the legacy wide table."""
+    names = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")]
+    return sorted(n for n in names
+                  if n.lower() not in _CATALOG_TABLES and n.lower() != LEGACY_RENAMED
+                  and _LEGACY_SIGNATURE <= _table_columns(conn, n))
+
+
 def _legacy_cms_payload(row: dict) -> dict:
     return {
         "sku": row["sku"],
@@ -248,7 +262,9 @@ def _legacy_cms_payload(row: dict) -> dict:
         "content_item_count": row["asset_count"],
         "last_modified_date": row["last_updated"],
         "legacy": {"tags": row["tags"], "compatible_figures": row["compatible_figures"],
-                   "category": row["category"], "subcategories": row["subcategories"]},
+                   "category": row["category"], "subcategories": row["subcategories"],
+                   # Verbatim: categories can't be recovered, and the vectors match this text.
+                   "embedding_text": row["embedding_text"]},
     }
 
 
@@ -315,10 +331,18 @@ def _migration_2(conn: sqlite3.Connection, ctx: MigrationContext) -> None:
         conn.execute(stmt)
     table = ctx.legacy_table
     if not table or not _table_exists(conn, table):
+        # Omitted or misnamed (real installs use SQLITE_TABLE_NAME, e.g. enriched_products):
+        # find the legacy table by shape so the import is never skipped by accident.
+        found = _legacy_shaped_tables(conn)
+        if len(found) > 1:
+            raise MigrationFailed(2, f"several legacy-shaped tables {found}; set the legacy "
+                                     "table name (SQLITE_TABLE_NAME) and restart")
+        table = found[0] if found else None
+    if table is None or table.lower() == LEGACY_RENAMED:
         return
     if _table_exists(conn, LEGACY_RENAMED):
-        logger.warning("Not importing legacy table %r: %r already exists", table, LEGACY_RENAMED)
-        return
+        raise MigrationFailed(2, f"both {table!r} and {LEGACY_RENAMED!r} exist; move one "
+                                 "aside and restart")
     cols = _table_columns(conn, table)
     if "sku" not in cols:
         raise MigrationFailed(2, f"legacy table {table!r} has no sku column")

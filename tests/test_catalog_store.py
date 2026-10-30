@@ -156,6 +156,7 @@ def test_failed_first_fetch_creates_record_without_fetched_at(tmp_path):
     s.upsert_source("daz_store_web", "9", "daz:9", {}, None, fetch_error="timeout",
                     now="2024-01-02T00:00:00")
     assert s.source_index("daz_store_web")["9"]["fetched_at"] is None
+    assert s.source_index("daz_store_web")["9"]["payload_hash"] is None
     s.refresh_views(["daz:9"], FIGS)
     # enriched_at falls back to the daz_cms fetch time.
     assert s.get_by_sku("9")["enriched_at"] == "2024-01-01T00:00:00"
@@ -229,7 +230,7 @@ def test_reads(store):
 def test_empty_store_reads(tmp_path):
     s = CatalogStore(str(tmp_path / "c.db"))
     assert s.count() == 0
-    assert s.get_last_updated() is None
+    assert s.get_last_updated() == "N/A"
     assert s.get_filter_values() == {"categories": [], "artists": [], "compatible_figures": []}
     assert s.asset_totals() == {"total": 0, "installed": 0, "not_installed": 0, "fetch_errors": 0}
 

@@ -47,6 +47,17 @@ def test_legacy_payload_uses_legacy_derived_fields():
     assert r["name"] == CMS["product_name"] and r["asset_count"] == 7
 
 
+def test_legacy_embedding_text_used_verbatim():
+    text = "A 3D asset package titled 'Old'. It is categorized under: Props, Decor. "
+    legacy = {"tags": "Props,Decor", "compatible_figures": "", "category": "props",
+              "subcategories": "", "embedding_text": text}
+    cms = {k: v for k, v in CMS.items() if k != "categories"}  # legacy payloads lack it
+    r = build_view_row("daz:1", dict(cms, legacy=legacy), WEB, FIGS)
+    assert r["embedding_text"] == text
+    # Without the legacy dict the text is derived as usual.
+    assert build_view_row("daz:1", cms, WEB, FIGS)["embedding_text"] != text
+
+
 def test_view_row_without_web_record():
     r = build_view_row("daz:12345", CMS, None, FIGS)
     assert r["url"] is None

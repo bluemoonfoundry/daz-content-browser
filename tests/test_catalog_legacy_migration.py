@@ -75,7 +75,8 @@ def test_legacy_source_records(legacy_db):
         "content_types": a1["formats"], "content_item_count": a1["asset_count"],
         "last_modified_date": a1["last_updated"],
         "legacy": {"tags": a1["tags"], "compatible_figures": a1["compatible_figures"],
-                   "category": a1["category"], "subcategories": a1["subcategories"]},
+                   "category": a1["category"], "subcategories": a1["subcategories"],
+                   "embedding_text": a1["embedding_text"]},
     }
     assert rec["source_modified"] == "2024-03-01T10:20:30"
     assert rec["payload_hash"] is None and rec["present"] == 1 and rec["asset_id"] == "daz:A1"
@@ -210,3 +211,56 @@ def test_bulk_import(tmp_path):
     assert len(s.get_filter_values()["artists"]) == 50
     assert len(s.asset_ids_matching(tags=["Shared"])) == 3000
     assert len(s.asset_ids_matching(artists=["Artist 7"], compatible_figures=["Genesis 1"])) == 20
+
+
+def test_refresh_before_cms_refresh_keeps_legacy_text(legacy_db):
+    s = CatalogStore(legacy_db, legacy_table="products")
+    ids = [f"daz:{sku}" for sku in LEGACY]
+    before = {r["asset_id"]: r for r in s.get_rows(ids)}
+    assert s.mark_absent("daz_cms", present_keys={"A1", "A3"}) == ["daz:A2"]
+    s.refresh_views(ids, ["Genesis 8 Female", "Genesis 9"])
+    after = {r["asset_id"]: r for r in s.get_rows(ids)}
+    for a in ids:
+        changed = {k for k in before[a] if before[a][k] != after[a][k]}
+        assert after[a]["embedding_text"] == before[a]["embedding_text"]
+        assert after[a]["doc_hash"] == before[a]["doc_hash"]
+        assert changed == ({"installed"} if a == "daz:A2" else set()), (a, changed)
+    assert after["daz:A2"]["installed"] == 0
+
+
+def _make_legacy(db, table):
+    conn = sqlite3.connect(db)
+    conn.executescript(FIXTURE_SQL.replace("products", table))
+    conn.close()
+
+
+def test_legacy_table_auto_detected(tmp_path):
+    db = str(tmp_path / "real_name.db")
+    _make_legacy(db, "enriched_products")
+    s = CatalogStore(db)  # no legacy_table given
+    assert s.migration_error is None and s.count() == 3
+    assert s.get_by_sku("A1")["embedding_text"] == LEGACY["A1"]["embedding_text"]
+    assert "enriched_products" not in table_names(db) and "products_legacy" in table_names(db)
+    # A wrong name falls back to detection too.
+    db2 = str(tmp_path / "wrong_name.db")
+    _make_legacy(db2, "enriched_products")
+    assert CatalogStore(db2, legacy_table="products").count() == 3
+
+
+def test_ambiguous_legacy_tables_reported(tmp_path):
+    db = str(tmp_path / "two.db")
+    _make_legacy(db, "enriched_products")
+    _make_legacy(db, "other_products")
+    s = CatalogStore(db)
+    assert "enriched_products" in s.migration_error and "other_products" in s.migration_error
+    assert user_version(db) == 1
+    assert "assets" not in data_tables_with_rows(db)
+
+
+def test_legacy_table_alongside_products_legacy_reported(legacy_db):
+    _make_legacy(legacy_db, "products_legacy")
+    s = CatalogStore(legacy_db, legacy_table="products")
+    assert s.migration_error is not None and "products_legacy" in s.migration_error
+    assert user_version(legacy_db) == 1
+    assert {"products", "products_legacy"} <= table_names(legacy_db)
+    assert "assets" not in data_tables_with_rows(legacy_db)

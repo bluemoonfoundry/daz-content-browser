@@ -180,15 +180,22 @@ def build_view_row(asset_id: str, cms, web, figure_names: list) -> dict:
     category = cats['category']
     subcategories = ','.join(cats['subcategories'])
 
+    # generate_embedding_text crashes on a None description; '' gives identical text.
+    text_web = dict(web, description=web.get('description') or '')
+    embedding_text = generate_embedding_text(cms, text_web)
+
+    # A migrated (not yet refreshed) CMS payload carries the legacy-derived values. Its
+    # embedding text is kept verbatim: the legacy payload lacks ``categories``, so it
+    # cannot be re-derived, and the existing vectors were built from exactly this text.
     legacy = cms.get('legacy')
     if legacy:
         tags = legacy.get('tags')
         figures = legacy.get('compatible_figures')
         category = legacy.get('category')
         subcategories = legacy.get('subcategories')
+        if 'embedding_text' in legacy:
+            embedding_text = legacy['embedding_text']
 
-    # generate_embedding_text crashes on a None description; '' gives identical text.
-    text_web = dict(web, description=web.get('description') or '')
     artist = cms.get('artists')
 
     return {
@@ -208,7 +215,7 @@ def build_view_row(asset_id: str, cms, web, figure_names: list) -> dict:
         "required_products": web.get('required_products'),
         "compatible_figures": figures,
         "compatible_software": web.get('compatible_software'),
-        "embedding_text": generate_embedding_text(cms, text_web),
+        "embedding_text": embedding_text,
         "last_updated": cms.get('last_modified_date'),
         "category": category,
         "subcategories": subcategories,

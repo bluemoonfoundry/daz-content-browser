@@ -93,17 +93,16 @@ class CatalogStore:
                     " fetch_error = NULL",
                     (source, source_key, asset_id, now, now, source_modified, body, phash, now))
             else:
-                # A new record still stores the (probably empty) payload but no fetched_at;
-                # an existing one keeps payload, hash, source_modified and fetched_at.
+                # A new record stores the (probably empty) payload with no hash and no
+                # fetched_at; an existing one keeps payload, hash, source_modified, fetched_at.
                 conn.execute(
                     "INSERT INTO source_records (source, source_key, asset_id, present, first_seen,"
                     " last_seen, removed_at, source_modified, payload, payload_hash, fetched_at,"
-                    " fetch_error) VALUES (?, ?, ?, 1, ?, ?, NULL, ?, ?, ?, NULL, ?)"
+                    " fetch_error) VALUES (?, ?, ?, 1, ?, ?, NULL, ?, ?, NULL, NULL, ?)"
                     " ON CONFLICT (source, source_key) DO UPDATE SET present = 1,"
                     " last_seen = excluded.last_seen, removed_at = NULL,"
                     " fetch_error = excluded.fetch_error",
-                    (source, source_key, asset_id, now, now, source_modified, body, phash,
-                     fetch_error))
+                    (source, source_key, asset_id, now, now, source_modified, body, fetch_error))
 
     def mark_absent(self, source: str, present_keys: set, now: Optional[str] = None) -> list:
         """Mark records of ``source`` whose key is not in ``present_keys`` as removed."""
@@ -264,10 +263,12 @@ class CatalogStore:
         with self._conn() as conn:
             return conn.execute("SELECT COUNT(*) FROM asset_view").fetchone()[0]
 
-    def get_last_updated(self) -> Optional[str]:
+    def get_last_updated(self) -> str:
+        """Most recent ``last_updated`` across assets, or "N/A" (legacy contract) if none."""
         with self._conn() as conn:
-            return conn.execute("SELECT MAX(last_updated) FROM asset_view"
-                                " WHERE last_updated IS NOT NULL AND last_updated != ''").fetchone()[0]
+            value = conn.execute("SELECT MAX(last_updated) FROM asset_view"
+                                 " WHERE last_updated IS NOT NULL AND last_updated != ''").fetchone()[0]
+        return value or "N/A"
 
     def asset_totals(self) -> dict:
         with self._conn() as conn:
