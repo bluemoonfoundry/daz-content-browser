@@ -99,29 +99,34 @@ def _load_from_cache(model_id: str):
     return session, tokenizer
 
 
-def load_embedding_model(model_id: str | None = None):
-    """Load (and, for the configured model only, export if missing) a model.
+def _load_session(model_id: str):
+    directory = model_dir(model_id)
+    if not (directory / "model.onnx").exists():
+        raise ModelUnavailable(f"ONNX model for '{model_id}' not found at '{directory}'.")
+    pair = _load_from_cache(model_id)
+    _sessions[model_id] = pair
+    return pair
 
-    Intended to be called at server startup for the configured model.
+
+def load_embedding_model(model_id: str | None = None):
+    """Load a model, exporting it first if it is the configured model and files are missing.
+
+    The only place export can happen: startup / explicit calls, never inside a request.
     """
     import sys
     global _session, _tokenizer
 
     configured = configured_model_id()
     model_id = model_id or configured
-    directory = model_dir(model_id)
-    if not (directory / "model.onnx").exists():
-        if model_id != configured:
-            raise ModelUnavailable(f"ONNX model for '{model_id}' not found at '{directory}'.")
+    if model_id == configured and not (model_dir(model_id) / "model.onnx").exists():
         if getattr(sys, 'frozen', False):
             raise ModelUnavailable(
-                f"ONNX model not found at '{directory}'. "
+                f"ONNX model not found at '{model_dir(model_id)}'. "
                 f"Download and export the model with the export tool before switching models."
             )
         _export_model(model_id)
 
-    pair = _load_from_cache(model_id)
-    _sessions[model_id] = pair
+    pair = _load_session(model_id)
     if model_id == configured:
         _session, _tokenizer = pair
     return pair
@@ -130,11 +135,11 @@ def load_embedding_model(model_id: str | None = None):
 def get_embedding_model(model_id: str | None = None):
     """Return the cached session + tokenizer for a model (None = configured), loading it on first use.
 
-    Raises ModelUnavailable if the model's files are missing and it cannot be exported.
+    Never exports: raises ModelUnavailable naming the model and directory if its files are missing.
     """
     model_id = model_id or configured_model_id()
     if model_id not in _sessions:
-        load_embedding_model(model_id)
+        _load_session(model_id)
     return _sessions[model_id]
 
 

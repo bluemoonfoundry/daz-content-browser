@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 import embedding_utils
-from catalog.model_config import SETTINGS_PATH
+from catalog.model_config import DEFAULT_MODEL_ID, SETTINGS_PATH, configured_model_id
 from embedding_utils import load_embedding_model
 from demo_data import (
     get_demo_search_results as search_mock,
@@ -62,7 +62,7 @@ _SETTINGS_DEFAULTS: dict = {
     "cms_user": os.getenv("DB_USER", ""),
     "cms_password": os.getenv("DB_PASS", ""),
     "cms_schema": os.getenv("DB_SCHEMA", "dzcontent"),
-    "embedding_model": os.getenv("EMBEDDING_MODEL", "BAAI/bge-large-en-v1.5"),
+    "embedding_model": os.getenv("EMBEDDING_MODEL", DEFAULT_MODEL_ID),
     "query_model": os.getenv("QUERY_MODEL", "BAAI/bge-large-en-v1.5"),
     "daz_script_server_url": os.getenv("DAZ_SCRIPT_SERVER_URL", "http://localhost:18811"),
     "daz_script_server_enabled": os.getenv("DAZ_SCRIPT_SERVER_ENABLED", "false").lower() == "true",
@@ -360,7 +360,9 @@ def get_health():
     }
     if not components["embedding_model"]["ok"]:
         components["embedding_model"]["repair"] = (
-            "Search and indexing need the ONNX model; check the server log for the load error."
+            f"Search and indexing need the ONNX model for '{configured_model_id()}', which is not "
+            f"loaded. Restart the server (or rebuild the index) to use it; check the server log "
+            f"if it still fails."
         )
     if not components["postgres"]["ok"]:
         components["postgres"]["repair"] = (

@@ -52,3 +52,13 @@ def test_fake_embedder_is_deterministic_per_model(fake_embedder):
     assert a.shape == (1, 8)
     assert np.allclose(a, embedding_utils.generate_embeddings(["x"], model_id="fake/model-a"))
     assert embedding_utils.generate_embeddings("x", model_id="fake/model-b").shape == (12,)
+
+
+def test_generate_never_exports_configured_model(monkeypatch, tmp_path):
+    monkeypatch.setattr(embedding_utils, "configured_model_id", lambda: "cfg/missing")
+    monkeypatch.setattr(embedding_utils, "model_dir", lambda m: tmp_path / "nope")
+    monkeypatch.setattr(embedding_utils, "_sessions", {})
+    monkeypatch.setattr(embedding_utils, "_export_model",
+                        lambda *a, **k: pytest.fail("export called at request time"))
+    with pytest.raises(embedding_utils.ModelUnavailable, match="cfg/missing"):
+        embedding_utils.generate_embeddings(["x"], model_id=None)
