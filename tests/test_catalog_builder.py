@@ -1,9 +1,10 @@
+import sqlite3
 import types
 
 import chromadb
 import pytest
 
-from catalog.builder import GenerationBuilder
+from catalog.builder import GenerationBuilder, RebuildIncomplete
 from catalog.generations import GenerationStore
 from catalog.store import CatalogStore
 from catalog_fakes import fake_embed
@@ -285,3 +286,108 @@ def test_chroma_manager_helpers(tmp_path, fake_embedder):
     mgr.delete_collection()  # already gone: no error
     names = {c.name for c in chromadb.PersistentClient(path=str(tmp_path / "c")).list_collections()}
     assert "xyz" not in names
+
+
+# --- fix round 1 ---------------------------------------------------------------------
+
+def _exhaust(env, gen, asset_ids):
+    for _ in range(3):
+        env.gens.record_error(gen["id"], asset_ids, "bad")
+
+
+def test_finish_refuses_when_every_asset_failed(adopted):
+    env = adopted
+    gen = env.builder.start_or_resume_rebuild("fake/model-b", refetch=False)
+    _exhaust(env, gen, ["daz:1", "daz:2", "daz:3"])
+    assert env.gens.pending(gen["id"]) == []
+    with pytest.raises(RebuildIncomplete):
+        env.builder.finish_rebuild(gen)
+    assert env.gens.active()["id"] == env.active_gen["id"]
+    assert env.gens.building()["id"] == gen["id"]
+    assert "legacy" in env.collection_names()
+
+
+def test_finish_refuses_above_error_threshold(env):
+    for sku in range(4, 16):  # 15 assets: threshold is max(10, 1%) = 10
+        _add_asset(env.catalog, str(sku))
+    env.adopt()
+    gen = env.builder.start_or_resume_rebuild("fake/model-b", refetch=False)
+    env.builder.embed_pending(gen)
+    _exhaust(env, gen, [f"daz:{i}" for i in range(1, 12)])  # 11 errors
+    with pytest.raises(RebuildIncomplete, match="11"):
+        env.builder.finish_rebuild(gen)
+    assert env.gens.active()["id"] == env.active_gen["id"]
+    env.builder.embed_pending(env.builder.start_or_resume_rebuild("fake/model-b", refetch=False))
+    env.builder.finish_rebuild(gen)  # recovered after resume
+    assert env.gens.active()["id"] == gen["id"]
+
+
+def test_first_build_with_errors_still_promotes(env):
+    gen = env.builder.start_or_resume_rebuild("fake/model-a", refetch=False)
+    _exhaust(env, gen, ["daz:1", "daz:2", "daz:3"])
+    env.builder.finish_rebuild(gen)
+    assert env.gens.active()["id"] == gen["id"]
+
+
+def test_resume_after_refusal_resets_attempts(adopted):
+    env = adopted
+    gen = env.builder.start_or_resume_rebuild("fake/model-b", refetch=False)
+    _exhaust(env, gen, ["daz:1", "daz:2", "daz:3"])
+    with pytest.raises(RebuildIncomplete):
+        env.builder.finish_rebuild(gen)
+    again = env.builder.start_or_resume_rebuild("fake/model-b", refetch=False)
+    assert again["id"] == gen["id"]
+    assert env.gens.pending(gen["id"]) == ["daz:1", "daz:2", "daz:3"]
+    assert env.builder.embed_pending(again)["embedded"] == 3
+    env.builder.finish_rebuild(again)
+    assert env.gens.active()["id"] == gen["id"]
+
+
+def test_failed_old_id_delete_keeps_asset_pending(adopted, monkeypatch):
+    env = adopted
+    gen = env.active_gen
+    _add_asset(env.catalog, "1", name="Renamed")
+    mgr = env.builder.collection(gen)
+    old_ids = env.gens.vector_ids_for(gen["id"], {"daz:1"})
+
+    real_delete = mgr.delete_ids
+    broken = [True]
+
+    def flaky(ids):
+        if broken[0]:
+            raise RuntimeError("locked")
+        real_delete(ids)
+    monkeypatch.setattr(mgr, "delete_ids", flaky)
+    result = env.builder.embed_pending(gen)
+    assert result["embedded"] == 1  # daz:3 only
+    assert env.gens.pending(gen["id"]) == ["daz:1"]
+    assert env.gens.vector_ids_for(gen["id"], {"daz:1"}) == old_ids == ["1"]
+    broken[0] = False
+    env.builder.embed_pending(gen)
+    assert env.gens.pending(gen["id"]) == []
+    ids = _ids(env, gen)
+    assert "daz:1" in ids and "1" not in ids
+    assert env.gens.vector_ids_for(gen["id"], {"daz:1"}) == ["daz:1"]
+
+
+def test_adopt_failure_leaves_no_generation_and_retry_adopts(env, monkeypatch):
+    # Map every legacy id onto one asset: the second vector row violates the primary key.
+    monkeypatch.setattr(env.builder, "_views_by_sku",
+                        lambda skus: {s: ("daz:1", "h") for s in skus})
+    with pytest.raises(sqlite3.IntegrityError):
+        env.builder.adopt_legacy("fake/model-a")
+    assert env.gens.active() is None and env.gens.get(1) is None
+    monkeypatch.delattr(env.builder, "_views_by_sku")
+    gen = env.builder.adopt_legacy("fake/model-a")
+    assert gen is not None and env.gens.vector_totals(gen["id"])["current"] == 2
+
+
+def test_adopt_unknown_legacy_ids_are_swept_as_orphans(env):
+    ChromaDbManager(env.chroma_path, "legacy").collection.upsert(
+        ids=["99"], embeddings=fake_embed(["x"], model_id="fake/model-a").tolist(), documents=["x"])
+    gen = env.adopt()
+    assert env.gens.orphans(gen["id"]) == ["99"]
+    assert env.gens.vector_totals(gen["id"])["current"] == 2
+    result = env.builder.embed_pending(gen)
+    assert result["orphans_removed"] == 1
+    assert "99" not in _ids(env, gen)

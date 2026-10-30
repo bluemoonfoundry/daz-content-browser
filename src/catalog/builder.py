@@ -25,6 +25,10 @@ _CHUNK = 500
 _PROBE_TEXT = "dimension probe"
 
 
+class RebuildIncomplete(Exception):
+    """A finished build is too broken to replace a working active generation."""
+
+
 def _batch_size_default() -> int:
     return int(os.getenv("BATCH_SIZE", "512"))
 
@@ -107,11 +111,14 @@ class GenerationBuilder:
         if not dim:
             logger.info("Legacy collection %r is empty; nothing to adopt.", self.legacy_collection)
             return None
-        gen = self.gens.create_active_adopted(self.legacy_collection, model_id, dim,
-                                              DOC_FORMAT_VERSION, LATEST_VERSION)
         views = self._views_by_sku(ids)
-        self.gens.record_current(gen["id"], [(views[sku][0], sku, views[sku][1])
-                                             for sku in ids if sku in views])
+        # Ids with no catalog row are recorded too (doc_hash NULL, no view row), so the
+        # orphan sweep in embed_pending deletes them instead of leaving them searchable.
+        items = [(views[sku][0], sku, views[sku][1]) if sku in views else (f"daz:{sku}", sku, None)
+                 for sku in ids]
+        # One transaction: an interrupted adoption leaves nothing behind and is retried.
+        gen = self.gens.adopt(self.legacy_collection, model_id, dim, DOC_FORMAT_VERSION,
+                              LATEST_VERSION, items)
         logger.info("Adopted legacy collection %r as generation %d (%d of %d vectors matched).",
                     self.legacy_collection, gen["id"], sum(1 for s in ids if s in views), len(ids))
         return gen
@@ -176,14 +183,20 @@ class GenerationBuilder:
                 self.gens.record_error(gen_id, ids, _err(e))
                 result["errors"] += len(ids)
             else:
-                # Adopted vectors live under bare SKU ids; replace them with asset_id ids.
+                # Adopted vectors live under bare SKU ids. Delete those before recording the
+                # new id: if the delete fails, the asset keeps its old row (old id, old hash)
+                # and stays pending, so no unreferenced duplicate is left in the collection.
                 new_ids = set(ids)
                 replaced = [v for v in self.gens.vector_ids_for(gen_id, new_ids)
                             if v not in new_ids]
+                kept_old: set = set()
+                if replaced and not self._delete_ids(mgr, replaced):
+                    kept_old = set(self.gens.assets_for_vectors(gen_id, replaced).values())
+                done = [r for r in rows if r["asset_id"] not in kept_old]
                 self.gens.record_current(gen_id, [(r["asset_id"], r["asset_id"], r["doc_hash"])
-                                                  for r in rows])
-                self._delete_ids(mgr, replaced)
-                result["embedded"] += len(ids)
+                                                  for r in done])
+                result["embedded"] += len(done)
+                result["errors"] += len(kept_old)
             if on_progress:
                 on_progress("embed", min(start + batch_size, total), total,
                             f"generation {gen_id}")
@@ -203,7 +216,10 @@ class GenerationBuilder:
         if building is not None:
             if (building["model_id"] == model_id
                     and building["doc_format_version"] == DOC_FORMAT_VERSION):
-                logger.info("Resuming generation %d (%s).", building["id"], model_id)
+                # Fresh retry budget, so a build refused for too many errors can recover.
+                reset = self.gens.reset_error_attempts(building["id"])
+                logger.info("Resuming generation %d (%s); %d failed asset(s) will be retried.",
+                            building["id"], model_id, reset)
                 return building
             self.discard(building, f"superseded by a rebuild for {model_id} "
                                    f"(doc format {DOC_FORMAT_VERSION})")
@@ -221,6 +237,17 @@ class GenerationBuilder:
         if remaining:
             raise RuntimeError(f"Generation {gen['id']} still has {len(remaining)} pending "
                                f"asset(s); not promoting.")
+        if self.gens.active() is not None:
+            # Replacing a working index: refuse a build that would leave search empty or
+            # badly incomplete. It stays building and is resumable.
+            totals = self.gens.vector_totals(gen["id"])
+            assets = self.catalog.count()
+            limit = max(10, assets // 100)
+            if (assets and totals["current"] == 0) or totals["error"] > limit:
+                raise RebuildIncomplete(
+                    f"Generation {gen['id']} not promoted: {totals['current']} current, "
+                    f"{totals['error']} failed of {assets} asset(s) (at most {limit} failures "
+                    f"allowed); the active index is unchanged. Re-run to retry the failures.")
         self.gens.promote(gen["id"])
         logger.info("Promoted generation %d (%s).", gen["id"], gen["collection_name"])
         self.cleanup_retired()

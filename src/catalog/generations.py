@@ -95,6 +95,16 @@ class GenerationStore:
 
     def create_active_adopted(self, collection_name: str, model_id: str, model_dim: int,
                               doc_format_version: int, schema_version: int) -> dict:
+        return self.adopt(collection_name, model_id, model_dim, doc_format_version,
+                          schema_version, [])
+
+    def adopt(self, collection_name: str, model_id: str, model_dim: int,
+              doc_format_version: int, schema_version: int, items: Iterable[tuple]) -> dict:
+        """Insert an active generation and its ``(asset_id, vector_id, doc_hash)`` rows atomically.
+
+        Either both the generation and every vector row exist afterwards, or neither does,
+        so an interrupted adoption is simply retried.
+        """
         now = _now()
         with self._write() as conn:
             cur = conn.execute(
@@ -104,6 +114,10 @@ class GenerationStore:
                 (model_id, model_dim, doc_format_version, schema_version, collection_name,
                  now, now, now))
             gen_id = cur.lastrowid
+            conn.executemany(
+                "INSERT INTO asset_vectors (generation_id, asset_id, vector_id, doc_hash, status, "
+                "error, attempts, embedded_at) VALUES (?, ?, ?, ?, 'current', NULL, 0, ?)",
+                [(gen_id, a, v, h, now) for a, v, h in items])
         return self.get(gen_id)
 
     def promote(self, gen_id: int, now: Optional[str] = None) -> None:
@@ -160,6 +174,12 @@ class GenerationStore:
                 "attempts = CASE WHEN status = 'error' AND doc_hash IS excluded.doc_hash "
                 "THEN attempts + 1 ELSE 1 END, "
                 "status = 'error', error = excluded.error, doc_hash = excluded.doc_hash", rows)
+
+    def reset_error_attempts(self, gen_id: int) -> int:
+        """Give every error row of ``gen_id`` a fresh retry budget; returns how many."""
+        with self._write() as conn:
+            return conn.execute("UPDATE asset_vectors SET attempts = 0 WHERE generation_id = ? "
+                                "AND status = 'error'", (gen_id,)).rowcount
 
     def drop_vectors(self, gen_id: int, asset_ids: list) -> None:
         with self._write() as conn:

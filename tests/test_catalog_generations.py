@@ -195,3 +195,30 @@ def test_placeholder_ids_never_returned(gens, catalog):
     gens.record_error(g, ["daz:b", "daz:gone"], "x")
     assert gens.vector_ids_for(g, {"daz:b", "daz:gone"}) == []
     assert gens.orphans(g) == []
+
+
+def test_adopt_inserts_generation_and_vectors(gens, catalog):
+    g = gens.adopt("legacy", "m", 8, 1, 1, [("daz:a", "a", "ha"), ("daz:x", "x", None)])
+    assert g["status"] == "active" and g["collection_name"] == "legacy"
+    assert gens.vector_totals(g["id"])["current"] == 1
+    assert gens.orphans(g["id"]) == ["x"]
+
+
+def test_adopt_is_atomic(gens, catalog):
+    # Duplicate vector ids violate asset_vectors_vector: nothing must be left behind.
+    with pytest.raises(sqlite3.IntegrityError):
+        gens.adopt("legacy", "m", 8, 1, 1, [("daz:a", "a", "ha"), ("daz:b", "a", "hb")])
+    assert _q(catalog, "SELECT COUNT(*) FROM index_generations")[0][0] == 0
+    assert _q(catalog, "SELECT COUNT(*) FROM asset_vectors")[0][0] == 0
+    g = gens.adopt("legacy", "m", 8, 1, 1, [("daz:a", "a", "ha"), ("daz:b", "b", "hb")])
+    assert gens.active()["id"] == g["id"] and gens.vector_totals(g["id"])["current"] == 2
+
+
+def test_reset_error_attempts(gens, catalog):
+    g = _build(gens)["id"]
+    gens.record_current(g, [("daz:a", "v-a", "ha"), ("daz:c", "v-c", "hc")])
+    for _ in range(3):
+        gens.record_error(g, ["daz:b"], "boom")
+    assert gens.pending(g) == []
+    assert gens.reset_error_attempts(g) == 1
+    assert gens.pending(g) == ["daz:b"]
