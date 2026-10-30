@@ -19,3 +19,12 @@ def demo_env(tmp_path_factory):
     # Fixed API token; keep the token file out of the real ~/.daz3d
     os.environ["VAB_API_TOKEN"] = "test-token"
     os.environ["VAB_API_TOKEN_FILE"] = str(tmp / "vab_api_token.txt")
+
+
+@pytest.fixture
+def fake_embedder(monkeypatch):
+    """Replace real ONNX embedding with a deterministic per-model fake (fake/* models only)."""
+    import embedding_utils
+    from catalog_fakes import fake_embed
+    monkeypatch.setattr(embedding_utils, "generate_embeddings", fake_embed)
+    monkeypatch.setattr(embedding_utils, "model_available", lambda model_id: model_id.startswith("fake/"))

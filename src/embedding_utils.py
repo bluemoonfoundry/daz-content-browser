@@ -6,47 +6,74 @@ import numpy as np
 from dotenv import load_dotenv
 load_dotenv()
 
+from catalog.model_config import configured_model_id
+
 logger = logging.getLogger(__name__)
 
-_HF_MODEL_ID = os.getenv("EMBEDDING_MODEL_ID", "BAAI/bge-large-en-v1.5")
-_model_slug  = _HF_MODEL_ID.split("/")[-1]   # e.g. "bge-large-en-v1.5"
-_env_model_dir = os.getenv("EMBEDDING_MODEL_DIR", "")
-_MODEL_DIR = Path(_env_model_dir) if _env_model_dir else (Path(__file__).parent.parent / "models" / _model_slug)
 _INFERENCE_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
 _PROFILE_PROVIDERS = os.getenv("EMBEDDING_PROFILE_PROVIDERS", "") == "1"
 
+_MODELS_ROOT = Path(__file__).parent.parent / "models"
+
+# model_id -> (session, tokenizer)
+_sessions: dict = {}
+# "Configured model loaded" flag for /health; set by load_embedding_model() for the configured model
 _session = None
 _tokenizer = None
 _profile_logged = False
 _embed_call_count = 0
 
 
-def _export_model():
-    """Download BAAI/bge-large-en-v1.5 from HuggingFace, export to ONNX, and cache locally.
+class ModelUnavailable(RuntimeError):
+    """The requested embedding model's ONNX files are missing and cannot be exported."""
 
-    Uses optimum + transformers — only called from export_model.py, never at server runtime.
+
+def model_dir(model_id: str) -> Path:
+    """Directory holding a model's ONNX export. EMBEDDING_MODEL_DIR applies only to the configured model."""
+    env_dir = os.getenv("EMBEDDING_MODEL_DIR", "")
+    if env_dir and model_id == configured_model_id():
+        return Path(env_dir)
+    return _MODELS_ROOT / model_id.split("/")[-1]
+
+
+def model_available(model_id: str) -> bool:
+    return (model_dir(model_id) / "model.onnx").exists()
+
+
+def model_loaded(model_id: str | None = None) -> bool:
+    return (model_id or configured_model_id()) in _sessions
+
+
+def _export_model(model_id: str | None = None):
+    """Download a model from HuggingFace, export to ONNX, and cache locally.
+
+    Uses optimum + transformers. Only for the configured model's first run (via
+    load_embedding_model); never call for other models at runtime.
     """
     from optimum.onnxruntime import ORTModelForFeatureExtraction
     from transformers import AutoTokenizer
 
-    logger.info(f"[embedding] First run — exporting {_HF_MODEL_ID} to ONNX. This may take a few minutes.")
-    _MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    model_id = model_id or configured_model_id()
+    target = model_dir(model_id)
+    logger.info(f"[embedding] First run — exporting {model_id} to ONNX. This may take a few minutes.")
+    target.mkdir(parents=True, exist_ok=True)
 
-    model = ORTModelForFeatureExtraction.from_pretrained(_HF_MODEL_ID, export=True)
-    model.save_pretrained(str(_MODEL_DIR))
+    model = ORTModelForFeatureExtraction.from_pretrained(model_id, export=True)
+    model.save_pretrained(str(target))
 
-    tokenizer = AutoTokenizer.from_pretrained(_HF_MODEL_ID)
-    tokenizer.save_pretrained(str(_MODEL_DIR))
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    tokenizer.save_pretrained(str(target))
 
-    logger.info(f"[embedding] Model exported and saved to {_MODEL_DIR}")
+    logger.info(f"[embedding] Model exported and saved to {target}")
 
 
-def _load_from_cache():
+def _load_from_cache(model_id: str):
     """Load the ONNX session and tokenizer directly — no torch or transformers required."""
     import onnxruntime as ort
     from tokenizers import Tokenizer
 
-    logger.info(f"[embedding] Loading ONNX model from {_MODEL_DIR}")
+    directory = model_dir(model_id)
+    logger.info(f"[embedding] Loading ONNX model from {directory}")
 
     available = ort.get_available_providers()
     providers = [p for p in ["DmlExecutionProvider", "CPUExecutionProvider"] if p in available]
@@ -58,9 +85,9 @@ def _load_from_cache():
         # each node. ORT's own profiler is the authoritative source for that.
         sess_options.enable_profiling = True
 
-    session = ort.InferenceSession(str(_MODEL_DIR / "model.onnx"), sess_options=sess_options, providers=providers)
+    session = ort.InferenceSession(str(directory / "model.onnx"), sess_options=sess_options, providers=providers)
 
-    tokenizer = Tokenizer.from_file(str(_MODEL_DIR / "tokenizer.json"))
+    tokenizer = Tokenizer.from_file(str(directory / "tokenizer.json"))
     tokenizer.enable_truncation(max_length=512)
     tokenizer.enable_padding()
 
@@ -72,35 +99,43 @@ def _load_from_cache():
     return session, tokenizer
 
 
-def load_embedding_model():
-    """Load (and if necessary export) the model. Intended to be called at server startup."""
+def load_embedding_model(model_id: str | None = None):
+    """Load (and, for the configured model only, export if missing) a model.
+
+    Intended to be called at server startup for the configured model.
+    """
     import sys
     global _session, _tokenizer
 
-    onnx_path = _MODEL_DIR / "model.onnx"
-    if not onnx_path.exists():
+    configured = configured_model_id()
+    model_id = model_id or configured
+    directory = model_dir(model_id)
+    if not (directory / "model.onnx").exists():
+        if model_id != configured:
+            raise ModelUnavailable(f"ONNX model for '{model_id}' not found at '{directory}'.")
         if getattr(sys, 'frozen', False):
-            raise RuntimeError(
-                f"ONNX model not found at '{_MODEL_DIR}'. "
+            raise ModelUnavailable(
+                f"ONNX model not found at '{directory}'. "
                 f"Download and export the model with the export tool before switching models."
             )
-        _export_model()
+        _export_model(model_id)
 
-    _session, _tokenizer = _load_from_cache()
-    return _session, _tokenizer
+    pair = _load_from_cache(model_id)
+    _sessions[model_id] = pair
+    if model_id == configured:
+        _session, _tokenizer = pair
+    return pair
 
 
-def get_embedding_model():
-    """Return the cached session + tokenizer, raising RuntimeError if the model is unavailable."""
-    global _session, _tokenizer
-    if _session is None:
-        load_embedding_model()
-    if _session is None:
-        raise RuntimeError(
-            f"Embedding model is not loaded. "
-            f"Ensure the ONNX model files are present at '{_MODEL_DIR}'."
-        )
-    return _session, _tokenizer
+def get_embedding_model(model_id: str | None = None):
+    """Return the cached session + tokenizer for a model (None = configured), loading it on first use.
+
+    Raises ModelUnavailable if the model's files are missing and it cannot be exported.
+    """
+    model_id = model_id or configured_model_id()
+    if model_id not in _sessions:
+        load_embedding_model(model_id)
+    return _sessions[model_id]
 
 
 def _mean_pool(last_hidden_state: np.ndarray, attention_mask: np.ndarray) -> np.ndarray:
@@ -138,16 +173,16 @@ def _log_provider_profile(session) -> None:
         logger.exception("[embedding] Failed to read provider profile")
 
 
-def generate_embeddings(texts, is_query: bool = False) -> np.ndarray:
+def generate_embeddings(texts, is_query: bool = False, model_id: str | None = None) -> np.ndarray:
     """Tokenise, run ONNX inference, mean-pool, and L2-normalise.
 
     Processes texts in sub-batches of EMBEDDING_BATCH_SIZE (default 32) to
     keep peak memory reasonable on CPU.
 
-    Returns float32 ndarray of shape (1024,) for a single string,
-    or (N, 1024) for a list.
+    model_id=None uses the configured model. Returns float32 ndarray of shape (dim,)
+    for a single string, or (N, dim) for a list.
     """
-    session, tokenizer = get_embedding_model()
+    session, tokenizer = get_embedding_model(model_id)
 
     single = isinstance(texts, str)
     if single:

@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 import embedding_utils
+from catalog.model_config import SETTINGS_PATH
 from embedding_utils import load_embedding_model
 from demo_data import (
     get_demo_search_results as search_mock,
@@ -44,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 
 APP_MODE = os.getenv("APP_MODE", "production")
-_SETTINGS_PATH = Path(__file__).parent.parent / "settings.json"
+_SETTINGS_PATH = SETTINGS_PATH
 _DIST_PATH = (
     Path(__file__).parent / "ui_dist"                   # installed wheel / PyInstaller
     if (Path(__file__).parent / "ui_dist").exists()
@@ -353,7 +354,7 @@ def get_health():
 
     components = {
         "vector_store": chroma_db_manager.health(),
-        "embedding_model": {"ok": embedding_utils._session is not None},
+        "embedding_model": {"ok": embedding_utils.model_loaded()},
         "sqlite": {"ok": sqlite_db.count() >= 0, "path": sqlite_db.sqlite_db_path},
         "postgres": {"ok": daz_pg_analyzer is not None},
     }

@@ -299,6 +299,7 @@ def server_command(args):
         os.environ["APP_MODE"] = "production"
     if args.model:
         os.environ["EMBEDDING_MODEL_ID"] = args.model
+        os.environ["EMBEDDING_MODEL_OVERRIDE"] = args.model  # beats settings.json in configured_model_id()
         print(f"--- Embedding model: {args.model} ---")
     if not is_loopback_bind(args.host):
         print(
