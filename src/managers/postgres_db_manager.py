@@ -58,10 +58,13 @@ async def _scrape_product_page_async(
     return rv
 
 
-async def _scrape_all_async(products_data: list, concurrency: int, on_progress=None) -> list:
+async def _scrape_all_async(products_data: list, concurrency: int, on_progress=None,
+                            errors: dict = None) -> list:
     """Scrapes all products concurrently.
 
     Returns a list of (product_data, web_data) tuples in the same order as products_data.
+    A failed scrape yields empty web_data; when ``errors`` is given, the exception is also
+    stored there under the product's index.
     """
     total = len(products_data)
     results = [None] * total
@@ -75,9 +78,11 @@ async def _scrape_all_async(products_data: list, concurrency: int, on_progress=N
         sku = product.get('sku')
         try:
             web_data = await _scrape_product_page_async(session, semaphore, sku)
-        except Exception:
+        except Exception as e:
             logger.exception(f"Scrape failed for SKU {sku!r}, using empty web_data.")
             web_data = {}
+            if errors is not None:
+                errors[i] = e
         results[i] = (product, web_data)
         completed += 1
         if on_progress:
@@ -87,6 +92,28 @@ async def _scrape_all_async(products_data: list, concurrency: int, on_progress=N
         await asyncio.gather(*[scrape_one(i, p) for i, p in enumerate(products_data)])
 
     return results
+
+
+def scrape_many(skus: list, concurrency: int, on_progress=None) -> dict:
+    """Scrape the store pages for ``skus``: ``{sku: web payload dict | Exception}``.
+
+    An exception value means that SKU's scrape failed, including the store returning no
+    data (``LookupError``), so the caller can record it and keep any earlier payload.
+    """
+    if not skus:
+        return {}
+    errors: dict = {}
+    scraped = asyncio.run(_scrape_all_async([{"sku": s} for s in skus], concurrency,
+                                            on_progress, errors=errors))
+    out = {}
+    for i, (product, web_data) in enumerate(scraped):
+        if i in errors:
+            out[product["sku"]] = errors[i]
+        elif not web_data:
+            out[product["sku"]] = LookupError("no store data")
+        else:
+            out[product["sku"]] = web_data
+    return out
 
 
 def scrape_product_page(sku):

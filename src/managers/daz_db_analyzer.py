@@ -1,5 +1,6 @@
 import logging
 import os
+from datetime import date, datetime
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
@@ -172,6 +173,23 @@ class DazDBAnalyzer:
         """
         results = self._execute_query(sql, (sku,))
         return results if results is not None else []
+
+    def get_all_products(self) -> list:
+        """Fetches every product with a non-empty SKU in one query (the reconciler's listing).
+
+        Datetime columns are converted with ``isoformat()`` exactly as the legacy ETL did,
+        so they compare equal to the ``source_modified`` values it stored; None stays None.
+
+        Raises:
+            RuntimeError: the query failed. An error must never look like an empty CMS.
+        """
+        logger.info("Fetching all products from PostgreSQL...")
+        sql = f"{self.QUERY_BODY} WHERE p.token IS NOT NULL AND p.token != '' {self.QUERY_GROUPING}"
+        results = self._execute_query(sql)
+        if results is None:
+            raise RuntimeError("DAZ CMS product query failed (see log)")
+        return [{k: v.isoformat() if isinstance(v, (datetime, date)) else v
+                 for k, v in row.items()} for row in results]
 
     def get_products_by_sku_list(self, skus):
         """Fetches full product data for a given list of SKUs, handling batching.
