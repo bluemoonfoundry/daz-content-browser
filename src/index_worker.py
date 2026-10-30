@@ -78,7 +78,17 @@ _CMS_UNAVAILABLE = (
     "DAZ CMS PostgreSQL is not available — check DB_NAME, DB_USER, DB_PASS, DB_HOST and "
     "DB_PORT (or the CMS connection in Settings) and that DAZ Studio's CMS is running."
 )
-_RESUME_HINT = "The new generation is kept; resume with `vab index rebuild`."
+# Before quarantining a store that won't open, wait this long and try once more, so a
+# transient failure (e.g. a file briefly locked) doesn't move a healthy store aside.
+_REOPEN_PAUSE_SECONDS = 1.0
+
+
+def _resume_hint(gen: dict) -> str:
+    """The exact command that resumes ``gen`` (another model or refetch flag would discard it)."""
+    cmd = f"vab index rebuild --model {gen['model_id']}"
+    if gen.get("refetch_started_at"):
+        cmd += " --refetch"
+    return f"The new generation is kept; resume with `{cmd}`."
 # embed_pending takes one snapshot per call; a rebuild makes up to this many passes so
 # failed batches are retried within their budget (GenerationStore.pending's max_attempts).
 _EMBED_PASSES = 3
@@ -189,6 +199,8 @@ def _rebuild(ctx: JobContext, model_id: str, refetch: bool) -> str:
     ctx.report("rebuild", f"Preparing a new index generation for {model_id}…")
     gen = m.builder.start_or_resume_rebuild(model_id, refetch=refetch)
     _check_cancel(ctx, gen)
+    # A refetch generation always finishes its refetch, whichever command resumes it.
+    refetch = refetch or bool(gen.get("refetch_started_at"))
     parts = []
     if refetch:
         # A resumed generation that was started without refetch has no marker: anything
@@ -200,11 +212,11 @@ def _rebuild(ctx: JobContext, model_id: str, refetch: bool) -> str:
     remaining = m.generations.pending(gen["id"])
     if remaining:
         raise RuntimeError(f"Generation {gen['id']} still has {len(remaining)} pending "
-                           f"asset(s) after this run. {_RESUME_HINT}")
+                           f"asset(s) after this run. {_resume_hint(gen)}")
     try:
         m.builder.finish_rebuild(gen)
     except RebuildIncomplete as e:
-        raise RuntimeError(f"{e} {_RESUME_HINT}") from e
+        raise RuntimeError(f"{e} {_resume_hint(gen)}") from e
     return f"Generation {gen['id']} ({model_id}) promoted: " + "; ".join(parts) + "."
 
 
@@ -273,6 +285,10 @@ def run_repair_job(ctx: JobContext) -> str:
     chroma_path = m.builder.chroma_path
     if os.path.exists(chroma_path):
         error = store_open_error(chroma_path)
+        if error is not None:
+            logger.warning("The vector store will not open (%s); retrying once.", error)
+            time.sleep(_REOPEN_PAUSE_SECONDS)
+            error = store_open_error(chroma_path)
         if error is not None:
             ctx.report("repair", "The vector store will not open; quarantining it…")
             moved = quarantine_store(chroma_path, error)

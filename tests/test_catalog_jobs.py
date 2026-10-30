@@ -21,6 +21,7 @@ def job_env(tmp_path, monkeypatch, fake_embedder):
     monkeypatch.setenv("EMBEDDING_MODEL_OVERRIDE", "fake/model-a")
     monkeypatch.setenv("BATCH_SIZE", "1")
     monkeypatch.setattr(index_worker, "_CANCEL_CHECK_SECONDS", 0)
+    monkeypatch.setattr(index_worker, "_REOPEN_PAUSE_SECONDS", 0)
 
     db = str(tmp_path / "catalog.db")
     chroma_path = str(tmp_path / "chroma")
@@ -229,7 +230,8 @@ def test_rebuild_incomplete_fails_and_keeps_building(job_env, monkeypatch):
     monkeypatch.setattr(embedding_utils, "generate_embeddings", broken)
     done = job_env.run("rebuild", {"model": "fake/model-b"})
     assert done["status"] == FAILED
-    assert "vab index rebuild" in done["error"]
+    # The hint resumes this generation; a plain `vab index rebuild` would discard it.
+    assert "`vab index rebuild --model fake/model-b`" in done["error"]
     assert job_env.gens.building() is not None
     assert job_env.gens.active()["id"] == active["id"]
 
@@ -322,3 +324,61 @@ def test_cancelled_index_just_stops(job_env):
     assert job_env.gens.active()["id"] == active["id"]
     assert job_env.gens.building() is None
     assert job_env.gens.pending(active["id"]) == ["daz:F6"]  # partial work stays
+
+
+def test_plain_rebuild_finishes_an_interrupted_refetch(job_env, monkeypatch):
+    import catalog.reconcile as reconcile
+    job_env.run("index")
+    monkeypatch.setattr(reconcile, "SCRAPE_BATCH", 1)
+
+    class Interrupting(FakeScraper):
+        def __call__(self, skus):
+            if self.calls:
+                raise KeyboardInterrupt
+            return super().__call__(skus)
+
+    fresh = {s: web_payload(s, description=f"Fresh {s}.") for s in SKUS}
+    job_env.scraper = Interrupting(pages=fresh)
+    with pytest.raises(KeyboardInterrupt):
+        job_env.run("rebuild", {"refetch": True})
+    first = job_env.scraper.scraped
+    building = job_env.gens.building()
+
+    job_env.scraper = FakeScraper(pages=fresh)
+    done = job_env.run("rebuild")  # no --refetch: the generation's marker decides
+    assert done["status"] == SUCCEEDED, done
+    assert job_env.gens.active()["id"] == building["id"]
+    assert sorted(job_env.scraper.scraped) == sorted(set(SKUS) - set(first))
+    for sku in SKUS:
+        assert job_env.catalog.get_by_sku(sku)["description"] == f"Fresh {sku}."
+
+
+def test_refetch_resume_hint_includes_refetch(job_env):
+    gen = {"model_id": "fake/model-b", "refetch_started_at": "2026-01-01T00:00:00+00:00"}
+    assert "`vab index rebuild --model fake/model-b --refetch`" in index_worker._resume_hint(gen)
+    gen["refetch_started_at"] = None
+    assert "`vab index rebuild --model fake/model-b`" in index_worker._resume_hint(gen)
+
+
+def test_repair_retries_a_transient_open_failure(job_env, monkeypatch, tmp_path):
+    import managers.chroma_db_manager as cdm
+    job_env.run("index")
+    answers = ["OSError: briefly locked", None]
+    monkeypatch.setattr(cdm, "store_open_error", lambda path: answers.pop(0))
+    done = job_env.run("repair")
+    assert done["status"] == SUCCEEDED, done
+    assert answers == []
+    assert "moved it to" not in done["progress"]
+    assert not any(".corrupt-" in p.name for p in tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("extra", [["--all"], ["--phase", "embed"], ["--limit", "5"]])
+def test_cli_load_force_rejects_partial_flags(monkeypatch, capsys, extra):
+    import main
+    ran = []
+    monkeypatch.setattr(main, "_run_index_job", lambda k, p: ran.append((k, p)))
+    monkeypatch.setattr("sys.argv", ["vab", "load", "--force", *extra])
+    with pytest.raises(SystemExit) as exc:
+        main.main()
+    assert exc.value.code != 0 and ran == []
+    assert "always" in capsys.readouterr().err

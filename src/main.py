@@ -113,6 +113,12 @@ def _run_index_job(kind: str, params: dict) -> None:
 def load_job(args) -> tuple:
     """The job `vab load` runs: an incremental index, or with --force a refetching rebuild."""
     if args.force:
+        conflicting = [flag for flag, set_ in (("--all", args.all), ("--phase", args.phase != "all"),
+                                               ("--limit", args.limit is not None)) if set_]
+        if conflicting:
+            raise ValueError(
+                f"`vab load --force` can't be combined with {', '.join(conflicting)}: --force always "
+                "re-fetches every product and rebuilds the whole index.")
         params = {"refetch": True}
         if args.model:
             params["model"] = args.model
@@ -135,7 +141,12 @@ def index_job(args) -> tuple:
 
 def load_command(args):
     """Reconciles the DAZ CMS into the catalog and embeds into the live index."""
-    _run_index_job(*load_job(args))
+    try:
+        job = load_job(args)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(2)
+    _run_index_job(*job)
 
 
 def index_command(args):
